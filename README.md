@@ -116,4 +116,6 @@ cd wenig-tool-manager
 pip install -r requirements.txt
 
 # Run the application
+
 python main.py
+## ____________

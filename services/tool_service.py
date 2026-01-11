@@ -7,6 +7,7 @@ from core.database import DatabaseManager
 from core.models import Tool, ToolAssignment
 from core.tool_codes import ToolCodeGenerator
 from core.observable import Observable
+from utils.security_check import check_edit_permission, check_delete_permission
 
 logger = logging.getLogger(__name__)
 
@@ -214,4 +215,5 @@ class ToolService(Observable):
     def get_required_position_for_head(self, head_number: int) -> Optional[str]:
         """Gets the required position for a head"""
         mapping = self.get_head_position_mapping()
+
         return mapping.get(head_number)

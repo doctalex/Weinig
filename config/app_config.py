@@ -14,6 +14,10 @@ class AppConfig:
     
     # Значения по умолчанию
     DEFAULT_CONFIG = {
+        "security": {
+            "mode": "read_only",  # ДОБАВЛЕНО: режим безопасности
+            "full_access_key": "ctrl+shift+f"  # ДОБАВЛЕНО: горячая клавиша
+        },
         "database": {
             "path": "tools_database.db",
             "auto_backup": True,
@@ -170,6 +174,14 @@ class AppConfig:
     def get_head_names(self) -> Dict[int, str]:
         """Возвращает имена голов"""
         return self.get("heads.names", self.DEFAULT_CONFIG["heads"]["names"])
+    
+    def get_security_mode(self) -> str:
+        """Возвращает текущий режим безопасности"""
+        return self.get("security.mode", "read_only")
+    
+    def set_security_mode(self, mode: str) -> bool:
+        """Устанавливает режим безопасности"""
+        return self.set("security.mode", mode)
     
     def _deep_update(self, target: Dict, source: Dict) -> Dict:
         """Рекурсивно обновляет словарь"""

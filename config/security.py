@@ -17,22 +17,29 @@ except ImportError:
 
 class SecurityManager:
     def __init__(self):
-        self.app_config = AppConfig()
+        self.app_config = AppConfig()  # Переименовываем для ясности
         
         # Загружаем текущий режим из конфигурации
-        current_mode = self.app_config.get('security_mode', 'read_only')
+        current_mode = self.app_config.get('security.mode', 'read_only')
         self._read_only = (current_mode == 'read_only')
         
         logger.info(f"Security mode initialized as: {'Read Only' if self._read_only else 'Full Access'}")
+        logger.info(f"Loaded from config: security.mode = {current_mode}")
         
     def toggle_security_mode(self):
         """Переключает режим безопасности"""
         self._read_only = not self._read_only
         
-        # Сохраняем в конфигурацию
+        # Сохраняем в конфигурацию с правильным ключом
         mode = 'read_only' if self._read_only else 'full_access'
-        self.app_config.set('security_mode', mode)
-        self.app_config.save()
+        success = self.app_config.set('security.mode', mode)
+        
+        if success:
+            save_success = self.app_config.save()
+            if save_success:
+                logger.info(f"Configuration saved successfully")
+            else:
+                logger.error(f"Failed to save configuration!")
         
         # Логируем
         mode_text = 'Read Only' if self._read_only else 'Full Access'
@@ -50,16 +57,16 @@ class SecurityManager:
     def set_full_access(self):
         """Switch to full access mode"""
         self._read_only = False
-        self.app_config.set('security_mode', 'full_access')
-        self.app_config.save()
-        logger.info("Switched to Full Access mode")
+        self.app_config.set('security.mode', 'full_access')
+        save_success = self.app_config.save()
+        logger.info(f"Switched to Full Access mode (save: {'success' if save_success else 'failed'})")
     
     def set_read_only(self):
         """Switch to read-only mode"""
         self._read_only = True
-        self.app_config.set('security_mode', 'read_only')
-        self.app_config.save()
-        logger.info("Switched to Read Only mode")
+        self.app_config.set('security.mode', 'read_only')
+        save_success = self.app_config.save()
+        logger.info(f"Switched to Read Only mode (save: {'success' if save_success else 'failed'})")
     
     def get_current_mode(self) -> str:
         """Get current mode as string"""

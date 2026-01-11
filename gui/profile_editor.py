@@ -250,6 +250,12 @@ class ProfileEditor:
             width=15
         )
         save_btn.pack(side=tk.LEFT, padx=5)
+        
+        # TODO: Добавить проверку прав доступа для кнопок когда будет готов SecurityManager
+        # Пример:
+        # if not self._check_security('delete_profile'):
+        #     delete_btn.config(state='disabled')
+        #     delete_btn.config(tooltip="Требуется роль 'admin' для удаления профилей")
     
     def center_window(self):
         """Центрирует окно относительно родительского"""
@@ -302,6 +308,10 @@ class ProfileEditor:
     
     def browse_image(self):
         """Выбирает изображение профиля"""
+        # Безопасность: проверяем права загрузки изображений
+        if not self._check_security('upload_images'):
+            return
+        
         filename = filedialog.askopenfilename(
             title="Select Profile Image",
             filetypes=[
@@ -313,21 +323,41 @@ class ProfileEditor:
         
         if filename:
             try:
+                # TODO: Добавить проверку файла через SecurityManager
+                # Пример:
+                # if not self._scan_file_for_security(filename):
+                #     show_error(self.window, "Security Error", "Файл содержит потенциальные угрозы")
+                #     return
+                
                 with open(filename, "rb") as f:
                     self.image_data = f.read()
                 
                 self.image_preview.set_image(self.image_data)
+                
+                # TODO: Логирование загрузки изображения
+                # self._log_security_action('upload_image', f'Загружено изображение: {os.path.basename(filename)}')
                 
             except Exception as e:
                 show_error(self.window, "Error", f"Could not load image: {e}")
     
     def remove_image(self):
         """Удаляет изображение профиля"""
+        # Безопасность: проверяем права
+        if not self._check_security('modify_profile'):
+            return
+        
         self.image_data = None
         self.image_preview.clear()
+        
+        # TODO: Логирование удаления изображения
+        # self._log_security_action('remove_image', 'Удалено изображение профиля')
     
     def save(self):
         """Сохраняет профиль"""
+        # Безопасность: проверяем права сохранения
+        if not self._check_security('create_profile' if not self.is_editing else 'edit_profile'):
+            return
+        
         print("Save method called - Start")  # Debug print
         try:
             print("Getting name...")  # Debug print
@@ -343,6 +373,11 @@ class ProfileEditor:
             material_size = self.material_var.get().strip()
             product_size = self.product_var.get().strip()
 
+            # TODO: Логирование перед сохранением
+            # action_type = 'update' if self.is_editing else 'create'
+            # self._log_security_action(f'{action_type}_profile_attempt', 
+            #                          f'Попытка {action_type} профиля: {name}')
+            
             # Prepare profile data for logging
             profile_data = {
                 "action": "update" if self.is_editing else "create",
@@ -399,11 +434,20 @@ class ProfileEditor:
                 action = "created"
 
             if success:
+                # TODO: Логирование успешного сохранения
+                # self._log_security_action(f'{action_type}_profile_success', 
+                #                         f'Профиль успешно {action}: {name}')
+                
                 messagebox.showinfo("Success", f"Profile {action} successfully")
                 if self.on_save:
                     self.on_save()
                 self.window.destroy()
             else:
+                # TODO: Логирование ошибки сохранения
+                # self._log_security_action(f'{action_type}_profile_failed', 
+                #                         f'Ошибка при {action} профиля: {name}', 
+                #                         severity='HIGH')
+                
                 messagebox.showerror("Error", f"Failed to {action} profile")
 
         except ValueError as ve:
@@ -420,6 +464,10 @@ class ProfileEditor:
         
     def delete(self):
         """Удаляет профиль"""
+        # Безопасность: проверяем права удаления
+        if not self._check_security('delete_profile'):
+            return
+        
         if not self.profile:
             return
         
@@ -435,11 +483,26 @@ class ProfileEditor:
             message += f"\n\n⚠️ WARNING: {tools_count} tool(s) will also be deleted!"
             message += "\n\nAll tools assigned to this profile will be permanently deleted."
         
+        # TODO: Использовать SecurityManager для критических операций
+        # Пример:
+        # if not self._confirm_critical_operation("Confirm Delete", message):
+        #     return
+        
         if ask_yesno(self.window, "Confirm Delete", message):
             try:
+                # TODO: Логирование перед удалением
+                # self._log_security_action('delete_profile_attempt',
+                #                          f'Попытка удаления профиля: {self.profile.name} (ID: {self.profile.id})',
+                #                          severity='HIGH')
+                
                 success = self.profile_service.delete_profile(self.profile.id)
                 
                 if success:
+                    # TODO: Логирование успешного удаления
+                    # self._log_security_action('delete_profile_success',
+                    #                          f'Профиль успешно удален: {self.profile.name}',
+                    #                          severity='HIGH')
+                    
                     show_info(self.window, "Success", "Profile deleted successfully")
                     self.window.destroy()
                     if self.callback:
@@ -449,6 +512,117 @@ class ProfileEditor:
                     
             except Exception as e:
                 show_error(self.window, "Error", f"Delete failed: {e}")
+    
+    # ========== МЕТОДЫ БЕЗОПАСНОСТИ ==========
+    
+    def _check_security(self, action: str) -> bool:
+        """
+        Проверка прав доступа (заглушка для обратной совместимости)
+        
+        Args:
+            action: Действие для проверки ('create_profile', 'edit_profile', 'delete_profile', etc.)
+        
+        Returns:
+            bool: True если разрешено, False если запрещено
+        """
+        # TODO: Реализовать через SecurityManager когда будет готов
+        # Пример:
+        # try:
+        #     from config.security import SecurityManager
+        #     security_manager = SecurityManager()
+        #     if hasattr(self, 'current_user'):
+        #         if not security_manager.check_permission(action, self.current_user):
+        #             # Логирование попытки несанкционированного доступа
+        #             self._log_security_action(f'permission_denied_{action}',
+        #                                      f'Попытка выполнения действия: {action}',
+        #                                      severity='MEDIUM')
+        #             
+        #             # Показать предупреждение
+        #             required_role = security_manager.get_required_role(action)
+        #             messagebox.showwarning(
+        #                 "Доступ запрещен",
+        #                 f"У вас нет прав для выполнения действия: {action}\n"
+        #                 f"Требуемая роль: {required_role}"
+        #             )
+        #             return False
+        #         return True
+        # except ImportError:
+        #     pass
+        
+        # По умолчанию разрешаем все для обратной совместимости
+        return True
+    
+    def _confirm_critical_operation(self, title: str, message: str) -> bool:
+        """
+        Подтверждение критических операций
+        
+        Args:
+            title: Заголовок окна подтверждения
+            message: Сообщение для подтверждения
+        
+        Returns:
+            bool: True если подтверждено, False если отменено
+        """
+        # TODO: Использовать SecurityManager.confirm_critical_operation()
+        # Пример:
+        # try:
+        #     from config.security import SecurityManager
+        #     security_manager = SecurityManager()
+        #     return security_manager.confirm_critical_operation(title, message)
+        # except ImportError:
+        #     pass
+        
+        # Fallback на стандартное подтверждение
+        return ask_yesno(self.window, title, message)
+    
+    def _log_security_action(self, action: str, details: str, severity: str = 'LOW'):
+        """
+        Логирование действий безопасности
+        
+        Args:
+            action: Тип действия
+            details: Подробности действия
+            severity: Уровень серьезности ('LOW', 'MEDIUM', 'HIGH')
+        """
+        # TODO: Реализовать через SecurityManager.log_activity()
+        # Пример:
+        # try:
+        #     from config.security import SecurityManager
+        #     security_manager = SecurityManager()
+        #     if hasattr(self, 'current_user'):
+        #         security_manager.log_activity(
+        #             user=self.current_user,
+        #             action=action,
+        #             details=details,
+        #             severity=severity
+        #         )
+        # except ImportError:
+        #     pass
+        
+        # Временное логирование в консоль
+        logger.info(f"Security action: {action} - {details} [{severity}]")
+    
+    def _scan_file_for_security(self, filepath: str) -> bool:
+        """
+        Проверка файла на безопасность
+        
+        Args:
+            filepath: Путь к файлу
+        
+        Returns:
+            bool: True если файл безопасен, False если содержит угрозы
+        """
+        # TODO: Реализовать через SecurityManager.scan_file()
+        # Пример:
+        # try:
+        #     from config.security import SecurityManager
+        #     security_manager = SecurityManager()
+        #     return security_manager.scan_file(filepath)
+        # except ImportError:
+        #     pass
+        
+        # По умолчанию считаем файл безопасным
+        return True
 
 
 # Экспорт класса

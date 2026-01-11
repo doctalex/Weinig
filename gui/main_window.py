@@ -44,6 +44,9 @@ class WeinigHydromatManager:
         # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРА БЕЗОПАСНОСТИ (НОВОЕ)
         self.security = SecurityManager()
         
+        # Настройка горячих клавиш (НОВОЕ)
+        self._setup_hotkeys()
+        
         # Подписка на события
         self._setup_observers()
         
@@ -70,6 +73,12 @@ class WeinigHydromatManager:
         
         # ОБНОВЛЯЕМ ИНТЕРФЕЙС С УЧЕТОМ ТЕКУЩЕГО РЕЖИМА (НОВОЕ)
         self.update_ui_for_security_mode()
+    
+    def _setup_hotkeys(self):
+        """Настройка горячих клавиш для переключения режима безопасности"""
+        # Горячие клавиши для переключения режима безопасности
+        self.root.bind('<Control-Shift-F>', self.toggle_security_mode)
+        self.root.bind('<Control-Shift-f>', self.toggle_security_mode)
     
     def _setup_observers(self):
         """Настройка подписок на события"""
@@ -1429,9 +1438,52 @@ class WeinigHydromatManager:
         if hasattr(self, 'save_job_btn'):
             self.save_job_btn.config(state=tk.NORMAL)
             self.save_job_btn.config(
-                bg='#00BCD4',  # Голубой цвет
+                bg='#00BCD4',  # Голубый цвет
                 activebackground='darkcyan'
             )
+        
+        # Обновляем отладочную информацию
+        if hasattr(self, 'debug_label'):
+            self.debug_label.config(
+                text=f"Current: {'READ ONLY' if is_read_only else 'FULL ACCESS'}"
+            )
+    
+    # НОВЫЕ МЕТОДЫ ДЛЯ ПЕРЕКЛЮЧЕНИЯ РЕЖИМА БЕЗОПАСНОСТИ
+    def toggle_security_mode(self, event=None):
+        """Переключение режима безопасности"""
+        print(f"DEBUG: toggle_security_mode called")
+        print(f"DEBUG: Before - is_read_only: {self.security.is_read_only()}")
+        
+        # Переключаем режим
+        self.security.toggle_security_mode()
+        
+        print(f"DEBUG: After - is_read_only: {self.security.is_read_only()}")
+        print(f"DEBUG: Current mode: {self.security.get_current_mode()}")
+        
+        # Обновляем интерфейс
+        self.on_security_mode_change()
+        
+        # Показываем сообщение пользователю
+        mode_text = "Read Only" if self.security.is_read_only() else "Full Access"
+        from tkinter import messagebox
+        messagebox.showinfo("Security Mode", f"Switched to {mode_text} mode")
+    
+    def set_security_mode(self, mode: str):
+        """Устанавливает конкретный режим безопасности"""
+        if mode == 'full_access':
+            self.security.set_full_access()
+        elif mode == 'read_only':
+            self.security.set_read_only()
+        else:
+            return
+        
+        # Обновляем интерфейс
+        self.on_security_mode_change()
+        
+        # Показываем сообщение
+        mode_text = "Full Access" if not self.security.is_read_only() else "Read Only"
+        from tkinter import messagebox
+        messagebox.showinfo("Security Mode", f"Switched to {mode_text} mode")
 
 
 class ToolImageViewer(tk.Toplevel):
@@ -1487,6 +1539,3 @@ class ToolImageViewer(tk.Toplevel):
         except Exception as e:
             logger.error(f"Error displaying tool image: {e}")
             show_error(self, "Error", f"Could not display image: {e}")
-
-
-

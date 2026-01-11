@@ -18,7 +18,11 @@ from gui.profile_editor import ProfileEditor
 from gui.tool_manager import ToolManager
 from gui.tool_assigner import ToolAssigner
 
+# ДОБАВЛЯЕМ ИМПОРТ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
+from config.security import SecurityManager
+
 logger = logging.getLogger(__name__)
+
 
 class WeinigHydromatManager:
     """Главное окно управления инструментами"""
@@ -37,6 +41,9 @@ class WeinigHydromatManager:
         self.profile_service = ProfileService(self.db)
         self.tool_service = ToolService(self.db)
         
+        # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРА БЕЗОПАСНОСТИ (НОВОЕ)
+        self.security = SecurityManager()
+        
         # Подписка на события
         self._setup_observers()
         
@@ -47,6 +54,10 @@ class WeinigHydromatManager:
         
         # Настройка интерфейса
         self.setup_ui()
+        
+        # Загружаем профили с сортировкой по ID по умолчанию
+        self._sort_column = 'id'
+        self._sort_reverse = False
         self.load_profiles()
         
         # Карта голов
@@ -56,6 +67,9 @@ class WeinigHydromatManager:
             5: "2 RIGHT", 6: "2 LEFT", 7: "2 TOP", 8: "2 BOTTOM",
             9: "3 TOP", 10: "3 BOTTOM"
         }
+        
+        # ОБНОВЛЯЕМ ИНТЕРФЕЙС С УЧЕТОМ ТЕКУЩЕГО РЕЖИМА (НОВОЕ)
+        self.update_ui_for_security_mode()
     
     def _setup_observers(self):
         """Настройка подписок на события"""
@@ -70,6 +84,7 @@ class WeinigHydromatManager:
         self.tool_service.add_observer('tool_assigned', self._on_tool_assigned)
         self.tool_service.add_observer('assignment_cleared', self._on_assignment_cleared)
     
+    # СОБЫТИЯ БЕЗ ИЗМЕНЕНИЙ
     def _on_profile_created(self, profile_id: int):
         """Обработка создания профиля"""
         self.load_profiles()
@@ -179,6 +194,43 @@ class WeinigHydromatManager:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(0, weight=1)
     
+    def _sort_profiles(self, col, reverse):
+        """Сортировка профилей по выбранной колонке"""
+        # Получаем все элементы
+        items = [(self.profiles_tree.set(child, col), child) 
+                for child in self.profiles_tree.get_children('')]
+        
+        # Определяем тип сортировки
+        if col == 'id':
+            # Для ID сортируем как числа
+            items.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 0, reverse=reverse)
+        else:
+            # Для остальных колонок как строки
+            items.sort(key=lambda x: x[0].lower(), reverse=reverse)
+        
+        # Перемещаем элементы в отсортированном порядке
+        for index, (val, child) in enumerate(items):
+            self.profiles_tree.move(child, '', index)
+        
+        # Устанавливаем стрелку сортировки в заголовке
+        self.profiles_tree.heading(col, 
+            command=lambda: self._sort_profiles(col, not reverse))
+        
+        # Обновляем стрелку направления сортировки
+        for c in self.profiles_tree['columns']:
+            if c != col:
+                self.profiles_tree.heading(c, 
+                    command=lambda _c=c: self._sort_profiles(_c, False))
+                
+        # Устанавливаем стрелку вверх/вниз в зависимости от направления
+        sort_symbol = ' ↓' if reverse else ' ↑'
+        for c in self.profiles_tree['columns']:
+            heading_text = self.profiles_tree.heading(c)['text'].replace(' ↓', '').replace(' ↑', '')
+            if c == col:
+                self.profiles_tree.heading(c, text=heading_text + sort_symbol)
+            else:
+                self.profiles_tree.heading(c, text=heading_text)
+    
     def _setup_left_panel(self, parent):
         """Настройка левой панели с профилями"""
         style = ttk.Style()
@@ -249,9 +301,11 @@ class WeinigHydromatManager:
             selectmode='browse'
         )
         
-        # Configure columns
-        self.profiles_tree.heading('id', text='PROFILE ID')
-        self.profiles_tree.heading('name', text='PROFILE NAME')
+        # Configure columns with sorting
+        self.profiles_tree.heading('id', text='PROFILE ID', 
+                                 command=lambda: self._sort_profiles('id', False))
+        self.profiles_tree.heading('name', text='PROFILE NAME',
+                                 command=lambda: self._sort_profiles('name', False))
         
         # Set column widths
         self.profiles_tree.column('id', width=55, anchor='center')  # Slightly wider for larger text
@@ -285,17 +339,18 @@ class WeinigHydromatManager:
             'height': 1
         }
         
-        add_btn = tk.Button(button_frame, text="ADD PROFILE",
+        # СОХРАНЯЕМ ССЫЛКИ НА КНОПКИ ДЛЯ ОБНОВЛЕНИЯ СОСТОЯНИЯ (НОВОЕ)
+        self.add_profile_btn = tk.Button(button_frame, text="ADD PROFILE",
                         command=self.add_new_profile, **profile_button_style)
-        add_btn.grid(row=0, column=0, padx=5, pady=8, sticky='ew')
+        self.add_profile_btn.grid(row=0, column=0, padx=5, pady=8, sticky='ew')
         
-        edit_btn = tk.Button(button_frame, text="EDIT PROFILE",
+        self.edit_profile_btn = tk.Button(button_frame, text="EDIT PROFILE",
                             command=self.edit_profile, **profile_button_style)
-        edit_btn.grid(row=0, column=1, padx=5, pady=8, sticky='ew')
+        self.edit_profile_btn.grid(row=0, column=1, padx=5, pady=8, sticky='ew')
         
-        delete_btn = tk.Button(button_frame, text="DELETE PROFILE",
+        self.delete_profile_btn = tk.Button(button_frame, text="DELETE PROFILE",
                             command=self.delete_profile, **profile_button_style)
-        delete_btn.grid(row=0, column=2, padx=5, pady=8, sticky='ew')
+        self.delete_profile_btn.grid(row=0, column=2, padx=5, pady=8, sticky='ew')
         
         for i in range(3):
             button_frame.columnconfigure(i, weight=1)
@@ -322,6 +377,16 @@ class WeinigHydromatManager:
             font=self.large_font,
             foreground="blue",
         ).pack(side=tk.RIGHT)
+        
+        # ДОБАВЛЯЕМ ИНДИКАТОР РЕЖИМА БЕЗОПАСНОСТИ (НОВОЕ)
+        self.security_mode_label = tk.Label(
+            header_frame,
+            text="[READ ONLY]" if self.security.is_read_only() else "[FULL ACCESS]",
+            font=('Arial', 10, 'bold'),
+            fg='blue' if self.security.is_read_only() else 'green',
+            bg='white'
+        )
+        self.security_mode_label.pack(side=tk.RIGHT, padx=(0, 20))
         
         # Детали профиля
         details_frame = ttk.LabelFrame(right_panel, text="PROFILE DETAILS", padding="15")
@@ -390,7 +455,7 @@ class WeinigHydromatManager:
         about_text = """Weinig Hydromat 2000
     Advanced Tool Management System v2.0
                     
-    © Courtesy of Dr. Alex for Nordic B
+    Courtesy of Dr. Alex for Nordic B
             doctalex@gmail.com"""
         
         # Create a top level window
@@ -560,7 +625,7 @@ class WeinigHydromatManager:
             )
             if hasattr(self.profile_image_label, 'image'):
                 del self.profile_image_label.image
-
+    
     def show_profile_image_large(self, event):
         """Показывает изображение профиля в большом размере"""
         if not self.current_profile_id:
@@ -714,7 +779,7 @@ class WeinigHydromatManager:
             img_window.transient(self.root)
             img_window.grab_set()
 
-        except ImportError as e:
+        except ImportError:
             show_error(self.root, "Error", f"Required libraries not found: {e}")
         except Exception as e:
             logger.error(f"Error displaying profile image: {e}")
@@ -785,26 +850,50 @@ class WeinigHydromatManager:
             'height': 1
         }
         
-        # Кнопки
-        tool_buttons = [
-            ("ASSIGN TOOL", self.assign_tool, '#4CAF50', 'darkgreen'),
-            ("MANAGE TOOLS", self.manage_profile_tools, '#FF9800', 'darkorange'),
-            ("TOOL LIBRARY", self.open_global_library, '#9C27B0', 'darkviolet'),
-            ("SAVE JOB", self.save_all, '#00BCD4', 'darkcyan')
-        ]
+        # Кнопки - СОХРАНЯЕМ ССЫЛКИ ДЛЯ ОБНОВЛЕНИЯ СОСТОЯНИЯ
+        self.assign_tool_btn = tk.Button(
+            tools_buttons_frame,
+            text="ASSIGN TOOL",
+            command=self.assign_tool,
+            bg='#4CAF50',
+            activebackground='darkgreen',
+            **tool_button_style
+        )
+        self.assign_tool_btn.grid(row=0, column=0, padx=10, pady=5, sticky='ew')
         
-        for col, (text, command, color, active_color) in enumerate(tool_buttons):
-            btn = tk.Button(
-                tools_buttons_frame,
-                text=text,
-                command=command,
-                bg=color,
-                activebackground=active_color,
-                **tool_button_style
-            )
-            btn.grid(row=0, column=col, padx=10, pady=5, sticky='ew')
+        self.manage_tools_btn = tk.Button(
+            tools_buttons_frame,
+            text="MANAGE TOOLS",
+            command=self.manage_profile_tools,
+            bg='#FF9800',
+            activebackground='darkorange',
+            **tool_button_style
+        )
+        self.manage_tools_btn.grid(row=0, column=1, padx=10, pady=5, sticky='ew')
+        
+        self.library_btn = tk.Button(
+            tools_buttons_frame,
+            text="TOOL LIBRARY",
+            command=self.open_global_library,
+            bg='#9C27B0',
+            activebackground='darkviolet',
+            **tool_button_style
+        )
+        self.library_btn.grid(row=0, column=2, padx=10, pady=5, sticky='ew')
+        
+        self.save_job_btn = tk.Button(
+            tools_buttons_frame,
+            text="SAVE JOB",
+            command=self.save_all,
+            bg='#00BCD4',
+            activebackground='darkcyan',
+            **tool_button_style
+        )
+        self.save_job_btn.grid(row=0, column=3, padx=10, pady=5, sticky='ew')
+        
+        for col in range(4):
             tools_buttons_frame.columnconfigure(col, weight=1)
-            
+    
     def _on_profile_select(self, event):
         """Обработка выбора профиля"""
         selected = self.profiles_tree.selection()
@@ -847,6 +936,13 @@ class WeinigHydromatManager:
         """Показывает селектор инструментов для головы"""
         if not self.current_profile_id:
             show_warning(self.root, "Warning", "Please select a profile first")
+            return
+        
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "This function is not available in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
             return
 
         required_position = self.head_position_map.get(head_number)
@@ -953,6 +1049,10 @@ class WeinigHydromatManager:
             formatted_id = f"{profile.id:03d}"  # Форматируем ID с ведущими нулями (001, 002, и т.д.)
             self.profiles_tree.insert('', 'end', values=(formatted_id, profile.name))
         
+        # Применяем текущую сортировку
+        if hasattr(self, '_sort_column'):
+            self._sort_profiles(self._sort_column, self._sort_reverse)
+        
         # Если есть текущий профиль, выделяем его
         if hasattr(self, 'current_profile_id') and self.current_profile_id:
             for item in self.profiles_tree.get_children():
@@ -961,6 +1061,7 @@ class WeinigHydromatManager:
                     self.profiles_tree.selection_set(item)
                     self.profiles_tree.see(item)
                     break
+    
     def _on_search(self, event=None):
         """Обработка поиска"""
         search_term = self.search_var.get().strip().lower()
@@ -1059,6 +1160,13 @@ class WeinigHydromatManager:
     
     def add_new_profile(self):
         """Добавляет новый профиль"""
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "Cannot add profiles in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
+            return
+        
         ProfileEditor(
             self.root,
             self.profile_service,
@@ -1069,6 +1177,13 @@ class WeinigHydromatManager:
         """Редактирует выбранный профиль"""
         if not self.current_profile_id:
             show_warning(self.root, "Warning", "Please select a profile to edit")
+            return
+        
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "Cannot edit profiles in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
             return
         
         profile = self.profile_service.get_current_profile()
@@ -1084,6 +1199,13 @@ class WeinigHydromatManager:
         """Удаляет выбранный профиль"""
         if not self.current_profile_id:
             show_warning(self.root, "Warning", "No profile selected")
+            return
+        
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "Cannot delete profiles in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
             return
         
         profile = self.profile_service.get_current_profile()
@@ -1115,6 +1237,13 @@ class WeinigHydromatManager:
             show_warning(self.root, "Warning", "No profile selected")
             return
         
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "Cannot assign tools in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
+            return
+        
         selection = self.tools_tree.selection()
         if not selection:
             show_warning(self.root, "Warning", "Please select a milling head")
@@ -1133,6 +1262,13 @@ class WeinigHydromatManager:
             show_warning(self.root, "Warning", "Please select a profile first")
             return
         
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "Cannot manage tools in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
+            return
+        
         ToolManager(
             self.root,
             self.profile_service,
@@ -1143,6 +1279,13 @@ class WeinigHydromatManager:
     
     def open_global_library(self):
         """Открывает глобальную библиотеку инструментов"""
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        if self.security.is_read_only():
+            show_warning(self.root, "Access Denied", 
+                        "Cannot access tool library in Read Only mode.\n\n"
+                        "Press Ctrl+Shift+F to switch to Full Access mode.")
+            return
+        
         ToolManager(
             self.root,
             self.profile_service,
@@ -1211,6 +1354,53 @@ class WeinigHydromatManager:
                 
         except Exception as e:
             show_error(self.root, "Error", f"Failed to save job configuration: {str(e)}")
+    
+    # НОВЫЙ МЕТОД ДЛЯ ОБНОВЛЕНИЯ ИНТЕРФЕЙСА ПРИ СМЕНЕ РЕЖИМА
+    def on_security_mode_change(self):
+        """Вызывается при изменении режима безопасности"""
+        self.update_ui_for_security_mode()
+        logger.info(f"Security mode changed to: {'READ ONLY' if self.security.is_read_only() else 'FULL ACCESS'}")
+    
+    def update_ui_for_security_mode(self):
+        """Обновляет интерфейс в зависимости от текущего режима безопасности"""
+        is_read_only = self.security.is_read_only()
+        
+        # Обновляем индикатор режима
+        if self.security_mode_label:
+            if is_read_only:
+                self.security_mode_label.config(
+                    text="[READ ONLY]",
+                    fg='blue'
+                )
+            else:
+                self.security_mode_label.config(
+                    text="[FULL ACCESS]",
+                    fg='green'
+                )
+        
+        # Обновляем состояние кнопок
+        button_state = tk.NORMAL if not is_read_only else tk.DISABLED
+        
+        # Кнопки профилей
+        if hasattr(self, 'add_profile_btn'):
+            self.add_profile_btn.config(state=button_state)
+        if hasattr(self, 'edit_profile_btn'):
+            self.edit_profile_btn.config(state=button_state)
+        if hasattr(self, 'delete_profile_btn'):
+            self.delete_profile_btn.config(state=button_state)
+        
+        # Кнопки инструментов
+        if hasattr(self, 'assign_tool_btn'):
+            self.assign_tool_btn.config(state=button_state)
+        if hasattr(self, 'manage_tools_btn'):
+            self.manage_tools_btn.config(state=button_state)
+        if hasattr(self, 'library_btn'):
+            self.library_btn.config(state=button_state)
+        
+        # Кнопка SAVE JOB всегда доступна
+        if hasattr(self, 'save_job_btn'):
+            self.save_job_btn.config(state=tk.NORMAL)
+
 
 class ToolImageViewer(tk.Toplevel):
     def __init__(self, parent, tool, *args, **kwargs):

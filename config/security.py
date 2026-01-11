@@ -9,6 +9,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Импортируем AppConfig
+try:
+    from .app_config import AppConfig
+except ImportError:
+    # Альтернативный импорт для случаев когда запускаем из другого места
+    from config.app_config import AppConfig
+
 
 @dataclass
 class SecurityConfig:
@@ -62,22 +69,28 @@ class SecurityManager:
     
     def is_read_only(self) -> bool:
         """Check if in read-only mode"""
-        return self.config.mode == "read_only"
+        # Используем текущее состояние _read_only или проверяем конфиг
+        if hasattr(self, '_read_only'):
+            return self._read_only
+        # Fallback: проверяем конфигурацию
+        return self.config.get('security_mode', 'read_only') == "read_only"
     
     def is_full_access(self) -> bool:
         """Check if in full access mode"""
-        return self.config.mode == "full_access"
+        return not self.is_read_only()
     
     def set_full_access(self):
         """Switch to full access mode"""
-        self.config.mode = "full_access"
-        self._save_config()
+        self._read_only = False
+        self.config.set('security_mode', 'full_access')
+        self.config.save()
         logger.info("Switched to Full Access mode")
     
     def set_read_only(self):
         """Switch to read-only mode"""
-        self.config.mode = "read_only"
-        self._save_config()
+        self._read_only = True
+        self.config.set('security_mode', 'read_only')
+        self.config.save()
         logger.info("Switched to Read Only mode")
     
     def toggle_mode(self):

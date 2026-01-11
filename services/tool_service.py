@@ -37,7 +37,10 @@ class ToolService(Observable):
                 "Please switch to Full Access mode by pressing Ctrl+Shift+F."
             )
     
-    # === СУЩЕСТВУЮЩИЕ МЕТОДЫ ЧТЕНИЯ (без изменений) ===
+    def get_all_tools(self) -> List[Tool]:
+        """Получить все инструменты из базы"""
+        with self.Session() as session:
+            return session.query(Tool).all()
     
     def get_tools_by_profile(self, profile_id: int) -> List[Tool]:
         """Gets tools for a profile"""
@@ -253,3 +256,4 @@ class ToolService(Observable):
         except Exception as e:
             logger.error(f"Error clearing assignment: {e}")
             return False
+

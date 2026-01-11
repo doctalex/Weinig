@@ -4,7 +4,6 @@ Security modes management for Weinig application
 import json
 import logging
 from pathlib import Path
-from dataclasses import dataclass, asdict
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -13,20 +12,12 @@ logger = logging.getLogger(__name__)
 try:
     from .app_config import AppConfig
 except ImportError:
-    # Альтернативный импорт для случаев когда запускаем из другого места
     from config.app_config import AppConfig
-
-
-@dataclass
-class SecurityConfig:
-    """Security configuration"""
-    mode: str = "read_only"  # "read_only" or "full_access"
-    full_access_key: str = "ctrl+shift+f"
 
 
 class SecurityManager:
     def __init__(self):
-        self.app_config = AppConfig()  # Переименовываем для ясности
+        self.app_config = AppConfig()
         
         # Загружаем текущий режим из конфигурации
         current_mode = self.app_config.get('security_mode', 'read_only')
@@ -70,14 +61,10 @@ class SecurityManager:
         self.app_config.save()
         logger.info("Switched to Read Only mode")
     
-    def toggle_mode(self):
-        """Toggle between read-only and full access"""
-        if self.is_read_only():
-            self.set_full_access()
-        else:
-            self.set_read_only()
-        return self.is_full_access()
-    
     def get_current_mode(self) -> str:
         """Get current mode as string"""
         return 'read_only' if self._read_only else 'full_access'
+    
+    def get_mode_text(self) -> str:
+        """Get current mode as display text"""
+        return 'Read Only' if self._read_only else 'Full Access'

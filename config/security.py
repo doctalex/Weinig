@@ -18,20 +18,28 @@ class SecurityConfig:
 
 
 class SecurityManager:
-    """Singleton security manager"""
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-    
     def __init__(self):
-        if not hasattr(self, 'initialized'):
-            self.config_file = Path.home() / ".weinig_security.json"
-            self.config = SecurityConfig()
-            self._load_config()
-            self.initialized = True
+        self.config = AppConfig()
+        # Принудительно устанавливаем READ ONLY при старте
+        self._read_only = True
+        
+        # Перезаписываем конфигурацию чтобы следующее переключение работало
+        self.config.set('security_mode', 'read_only')
+        self.config.save()
+        
+    def toggle_security_mode(self):
+        """Переключает режим безопасности"""
+        self._read_only = not self._read_only
+        
+        # Сохраняем в конфигурацию
+        mode = 'read_only' if self._read_only else 'full_access'
+        self.config.set('security_mode', mode)
+        self.config.save()
+        
+        # Логируем
+        mode_text = 'Read Only' if self._read_only else 'Full Access'
+        logger.info(f"Switched to {mode_text} mode")
+        return self._read_only
     
     def _load_config(self):
         """Load security configuration"""

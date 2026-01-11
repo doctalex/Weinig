@@ -7,16 +7,36 @@ from core.database import DatabaseManager
 from core.models import Profile
 from core.observable import Observable
 
+# ДОБАВЛЯЕМ ИМПОРТ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
+from config.security import SecurityManager
+
 logger = logging.getLogger(__name__)
 
 
-class ProfileService(Observable):  # Make sure the class is defined
+class ProfileService(Observable):
     """Profile management service"""
     
     def __init__(self, db: DatabaseManager):
         super().__init__()
         self.db = db
         self.current_profile_id: Optional[int] = None
+        # ДОБАВЛЯЕМ ИНИЦИАЛИЗАЦИЮ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
+        self.security = SecurityManager()
+    
+    # === ВСПОМОГАТЕЛЬНЫЙ МЕТОД ДЛЯ ПРОВЕРКИ ДОСТУПА ===
+    def _check_edit_permission(self) -> bool:
+        """Check if editing is allowed in current security mode"""
+        return not self.security.is_read_only()
+    
+    def _raise_if_read_only(self):
+        """Raise error if in read-only mode"""
+        if self.security.is_read_only():
+            raise PermissionError(
+                "This operation is not available in Read Only mode.\n\n"
+                "Please switch to Full Access mode by pressing Ctrl+Shift+F."
+            )
+    
+    # === СУЩЕСТВУЮЩИЕ МЕТОДЫ ЧТЕНИЯ (без изменений) ===
     
     def get_all_profiles(self) -> List[Profile]:
         """Gets all profiles"""
@@ -29,41 +49,6 @@ class ProfileService(Observable):  # Make sure the class is defined
         if row:
             return Profile.from_db_row(row)
         return None
-    
-    def create_profile(self, name: str, description: str = '', 
-                      feed_rate: float = 2.5, material_size: str = '100x100',
-                      product_size: str = '90x90', image_data: bytes = None) -> Optional[int]:
-        """Creates a new profile"""
-        try:
-            profile_id = self.db.add_profile(
-                name, description, feed_rate, material_size, product_size, image_data
-            )
-            self.notify_observers('profile_created', profile_id)
-            return profile_id
-        except Exception as e:
-            logger.error(f"Error creating profile: {e}")
-            return None
-    
-    def update_profile(self, profile_id: int, **kwargs) -> bool:
-        """Updates a profile"""
-        success = self.db.update_profile(profile_id, **kwargs)
-        if success:
-            self.notify_observers('profile_updated', profile_id)
-        return success
-    
-    def delete_profile(self, profile_id: int) -> bool:
-        """Deletes a profile"""
-        success = self.db.delete_profile(profile_id)
-        if success:
-            self.notify_observers('profile_deleted', profile_id)
-            if self.current_profile_id == profile_id:
-                self.current_profile_id = None
-        return success
-    
-    def set_current_profile(self, profile_id: int):
-        """Sets the current profile"""
-        self.current_profile_id = profile_id
-        self.notify_observers('current_profile_changed', profile_id)
     
     def get_current_profile(self) -> Optional[Profile]:
         """Gets the current profile"""
@@ -101,6 +86,52 @@ class ProfileService(Observable):  # Make sure the class is defined
             stats['total_knives'] += knives
         
         return stats
+    
+    def set_current_profile(self, profile_id: int):
+        """Sets the current profile"""
+        self.current_profile_id = profile_id
+        self.notify_observers('current_profile_changed', profile_id)
+    
+    # === МЕТОДЫ РЕДАКТИРОВАНИЯ (добавляем проверки) ===
+    
+    def create_profile(self, name: str, description: str = '', 
+                      feed_rate: float = 2.5, material_size: str = '100x100',
+                      product_size: str = '90x90', image_data: bytes = None) -> Optional[int]:
+        """Creates a new profile"""
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        self._raise_if_read_only()
+        
+        try:
+            profile_id = self.db.add_profile(
+                name, description, feed_rate, material_size, product_size, image_data
+            )
+            self.notify_observers('profile_created', profile_id)
+            return profile_id
+        except Exception as e:
+            logger.error(f"Error creating profile: {e}")
+            return None
+    
+    def update_profile(self, profile_id: int, **kwargs) -> bool:
+        """Updates a profile"""
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        self._raise_if_read_only()
+        
+        success = self.db.update_profile(profile_id, **kwargs)
+        if success:
+            self.notify_observers('profile_updated', profile_id)
+        return success
+    
+    def delete_profile(self, profile_id: int) -> bool:
+        """Deletes a profile"""
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        self._raise_if_read_only()
+        
+        success = self.db.delete_profile(profile_id)
+        if success:
+            self.notify_observers('profile_deleted', profile_id)
+            if self.current_profile_id == profile_id:
+                self.current_profile_id = None
+        return success
 
 
 # Make sure this export is at the end of the file

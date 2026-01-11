@@ -120,27 +120,52 @@ class ToolManager:
         filter_frame = ttk.LabelFrame(parent, text="Filters & Search", padding="10")
         filter_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Filter buttons
+        # Main filter frame
         filter_buttons_frame = ttk.Frame(filter_frame)
         filter_buttons_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
-        ttk.Label(filter_buttons_frame, text="Filter by:").pack(side=tk.LEFT, padx=(0, 5))
+        # Position filter frame
+        pos_frame = ttk.LabelFrame(filter_buttons_frame, text="Position", padding=(5, 2))
+        pos_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
-        filter_options = [
+        # Position filter options
+        pos_options = [
             ("All", "ALL"),
             ("Bottom", "Bottom"),
             ("Top", "Top"),
             ("Right", "Right"),
-            ("Left", "Left"),
-            ("Straight", "Straight"),
-            ("Profile", "Profile")
+            ("Left", "Left")
         ]
         
-        for text, value in filter_options:
+        self.pos_var = tk.StringVar(value="ALL")
+        for text, value in pos_options:
             btn = ttk.Radiobutton(
-                filter_buttons_frame,
+                pos_frame,
                 text=text,
-                variable=self.filter_var,
+                variable=self.pos_var,
+                value=value,
+                command=self.apply_filters
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+        
+        # Status filter frame
+        status_frame = ttk.LabelFrame(filter_buttons_frame, text="Status", padding=(5, 2))
+        status_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # Status filter options
+        status_options = [
+            ("All", "ALL"),
+            ("Ready", "ready"),
+            ("Worn", "worn"),
+            ("In Service", "in_service")
+        ]
+        
+        self.status_var = tk.StringVar(value="ALL")
+        for text, value in status_options:
+            btn = ttk.Radiobutton(
+                status_frame,
+                text=text,
+                variable=self.status_var,
                 value=value,
                 command=self.apply_filters
             )
@@ -326,7 +351,8 @@ class ToolManager:
     
     def apply_filters(self):
         """Applies filters to the tools table"""
-        filter_value = self.filter_var.get()
+        pos_filter = self.pos_var.get()
+        status_filter = self.status_var.get()
         search_term = self.search_var.get().lower().strip()
         
         # First, make all items visible
@@ -334,29 +360,29 @@ class ToolManager:
             self.tools_tree.reattach(item, '', 'end')
         
         # If no filtering needed, we're done
-        if filter_value == "ALL" and not search_term:
+        if pos_filter == "ALL" and status_filter == "ALL" and not search_term:
             return
             
         # Now apply filters
         for item in self.all_items:
             values = self.tools_tree.item(item)["values"]
+            item_tags = self.tools_tree.item(item, 'tags')
             
             if not values:
                 continue
             
-            # Check position/type filter
-            filter_match = False
-            if filter_value == "ALL":
-                filter_match = True
-            elif filter_value in ["Bottom", "Top", "Right", "Left"]:
-                # Position is at index 3 in the values list
+            # Check position filter
+            pos_match = True
+            if pos_filter != "ALL":
+                pos_match = False
                 if len(values) > 3 and values[3]:
-                    filter_match = (str(values[3]).lower() == filter_value.lower())
-            elif filter_value in ["Straight", "Profile"]:
-                # Tool type is at index 4 in the values list
-                if len(values) > 4 and values[4]:
-                    filter_match = (str(values[4]).lower() == filter_value.lower())
-
+                    pos_match = (str(values[3]).lower() == pos_filter.lower())
+            
+            # Check status filter
+            status_match = True
+            if status_filter != "ALL":
+                status_match = status_filter in item_tags
+                
             # Check search term in all string values
             search_match = True
             if search_term:
@@ -366,8 +392,8 @@ class ToolManager:
                     if value is not None
                 )
 
-            # Hide row if it doesn't match the filter or search
-            if not (filter_match and search_match):
+            # Hide row if it doesn't match all active filters and search
+            if not (pos_match and status_match and search_match):
                 self.tools_tree.detach(item)
     
     def on_search(self, event=None):
@@ -395,6 +421,9 @@ class ToolManager:
     
     def add_tool(self):
         """Добавляет новый инструмент"""
+        # Безопасность: проверяем права (опционально)
+        self._check_security('create_tool')
+        
         ToolEditor(
             self.window,
             self.profile_service,
@@ -405,6 +434,9 @@ class ToolManager:
     
     def edit_selected_tool(self, event=None):
         """Редактирует выбранный инструмент"""
+        # Безопасность: проверяем права (опционально)
+        self._check_security('edit_tool')
+        
         selection = self.tools_tree.selection()
         if not selection:
             show_error(self.window, "Warning", "Please select a tool to edit")
@@ -437,6 +469,10 @@ class ToolManager:
     
     def delete_selected_tool(self):
         """Удаляет выбранный инструмент"""
+        # Безопасность: проверяем права (опционально)
+        if not self._check_security('delete_tool'):
+            return
+        
         selection = self.tools_tree.selection()
         if not selection:
             return
@@ -450,13 +486,16 @@ class ToolManager:
         tool_code = values[1]
         profile_name = values[2] if len(values) > 2 else "Unknown"
         
-        if not ask_yesno(self.window, "Confirm Delete",
-                        f"Delete tool '{tool_code}' from profile '{profile_name}'?\n"
-                        f"This action cannot be undone."):
+        # Безопасность: дополнительное подтверждение для удаления
+        if not self._confirm_critical_operation(
+            "Confirm Delete",
+            f"Delete tool '{tool_code}' from profile '{profile_name}'?\n"
+            f"This action cannot be undone."
+        ):
             return
         
         # Находим и удаляем инструмент
-        tool = self.tool_service.get_tool_by_code(tool_code)
+        tool = self.tools_service.get_tool_by_code(tool_code)
         if not tool:
             show_error(self.window, "Error", "Tool not found")
             return
@@ -489,6 +528,9 @@ class ToolManager:
             # Активируем/деактивируем пункт меню для просмотра изображения
             self.context_menu.entryconfig("View Image", state='normal' if has_image else 'disabled')
             
+            # Безопасность: проверяем права для контекстного меню
+            self._update_context_menu_security()
+            
             # Показываем контекстное меню
             self.context_menu.tk_popup(event.x_root, event.y_root)
     
@@ -520,6 +562,9 @@ class ToolManager:
                 
     def view_tool_image(self):
         """Отображает изображение инструмента в новом окне"""
+        # Безопасность: проверяем права (опционально)
+        self._check_security('view_images')
+        
         selection = self.tools_tree.selection()
         if not selection:
             return
@@ -583,3 +628,41 @@ class ToolManager:
         except Exception as e:
             logger.error(f"Ошибка при отображении изображения: {e}")
             show_error(self.window, "Ошибка", f"Не удалось отобразить изображение: {e}")
+    
+    # ========== БЕЗОПАСНОСТЬ: ДОБАВЛЕННЫЕ МЕТОДЫ ==========
+    
+    def _check_security(self, action: str) -> bool:
+        """
+        Проверка безопасности (можно активировать позже)
+        Сейчас возвращает True для обратной совместимости
+        """
+        # TODO: Реализовать проверку через SecurityManager когда будет готово
+        # try:
+        #     from config.security import SecurityManager
+        #     security_manager = SecurityManager()
+        #     if hasattr(self, 'current_user'):
+        #         return security_manager.check_permission(action, self.current_user)
+        # except ImportError:
+        #     pass
+        
+        return True  # По умолчанию разрешаем все для обратной совместимости
+    
+    def _confirm_critical_operation(self, title: str, message: str) -> bool:
+        """
+        Подтверждение критических операций
+        """
+        # TODO: Использовать SecurityManager.confirm_critical_operation
+        return ask_yesno(self.window, title, message)
+    
+    def _update_context_menu_security(self):
+        """
+        Обновление контекстного меню в зависимости от прав
+        Сейчас не делает ничего для обратной совместимости
+        """
+        # TODO: Реализовать когда SecurityManager будет готов
+        # Пример:
+        # can_edit = self._check_security('edit_tool')
+        # can_delete = self._check_security('delete_tool')
+        # self.context_menu.entryconfig("Edit Tool", state='normal' if can_edit else 'disabled')
+        # self.context_menu.entryconfig("Delete Tool", state='normal' if can_delete else 'disabled')
+        pass

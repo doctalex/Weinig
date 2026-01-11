@@ -20,12 +20,22 @@ class ToolManager:
     
     def __init__(self, parent, profile_service: ProfileService,
                  tool_service: ToolService, profile_id: Optional[int] = None,
-                 callback: Optional[callable] = None):
+                 callback: Optional[callable] = None, read_only: bool = False):
+        """
+        Args:
+            parent: Родительское окно
+            profile_service: Сервис профилей
+            tool_service: Сервис инструментов
+            profile_id: ID профиля или None для глобального режима
+            callback: Коллбек после сохранения
+            read_only: Режим только для чтения
+        """
         self.parent = parent
         self.profile_service = profile_service
         self.tool_service = tool_service
         self.profile_id = profile_id
         self.callback = callback
+        self.read_only = read_only  # Режим только для чтения
         
         # Initialize filter variables
         self.filter_var = tk.StringVar(value="ALL")
@@ -56,6 +66,10 @@ class ToolManager:
                 title = f"Tools for Profile: {profile.name}"
         else:
             title = "Global Tool Library"
+        
+        # Добавляем индикатор READ ONLY
+        if self.read_only:
+            title += " [READ ONLY]"
         
         self.window.title(title)
         self.window.geometry("1000x600")
@@ -180,12 +194,13 @@ class ToolManager:
         search_entry.pack(side=tk.LEFT, padx=5)
         search_entry.bind("<KeyRelease>", self.on_search)
         
-        # Add tool button
-        ttk.Button(
-            filter_frame, 
-            text="+ Add New Tool",
-            command=self.add_tool
-        ).pack(side=tk.RIGHT, padx=(10, 0))
+        # Add tool button (скрываем в READ ONLY режиме)
+        if not self.read_only:
+            ttk.Button(
+                filter_frame, 
+                text="+ Add New Tool",
+                command=self.add_tool
+            ).pack(side=tk.RIGHT, padx=(10, 0))
     
     def _setup_table(self, parent):
         """Настройка таблицы инструментов"""
@@ -199,7 +214,6 @@ class ToolManager:
             show="headings",
             selectmode="browse",
             style="ToolManager.Treeview"
-            #height=20
         )
         
         # Настройка колонок
@@ -261,15 +275,22 @@ class ToolManager:
         self.tools_tree.bind("<Double-1>", self.on_double_click)
         self.tools_tree.bind("<Button-1>", self.on_single_click)
         
-        # Контекстное меню
+        # Контекстное меню (меняем в зависимости от режима)
         self.context_menu = tk.Menu(self.window, tearoff=0)
-        self.context_menu.add_command(label="Edit Tool", 
-                                     command=self.edit_selected_tool)
+        
+        if not self.read_only:
+            self.context_menu.add_command(label="Edit Tool", 
+                                         command=self.edit_selected_tool)
+            self.context_menu.add_command(label="Delete Tool", 
+                                         command=self.delete_selected_tool)
+        
         self.context_menu.add_command(label="View Image",
                                     command=self.view_tool_image,
                                     state='disabled')
-        self.context_menu.add_command(label="Delete Tool", 
-                                     command=self.delete_selected_tool)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="View Details",
+                                    command=self.view_tool_details)
+        
         self.tools_tree.bind("<Button-3>", self.show_context_menu)
         
         # Переменная для хранения выбранного инструмента
@@ -286,7 +307,7 @@ class ToolManager:
         self.update_statistics()
     
     def load_tools(self):
-        """Загружает инструменты в таблицу"""
+        """Загружает инструменты в таблицу - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
         # Очищаем таблицу
         for item in self.tools_tree.get_children():
             self.tools_tree.delete(item)
@@ -294,19 +315,29 @@ class ToolManager:
         
         # Получаем инструменты
         if self.profile_id:
+            # Режим профиля: получаем инструменты только этого профиля
             tools = self.tool_service.get_tools_by_profile(self.profile_id)
         else:
-            # Получаем все инструменты из всех профилей
-            tools = []
-            profiles = self.profile_service.get_all_profiles()
-            for profile in profiles:
-                profile_tools = self.tool_service.get_tools_by_profile(profile.id)
-                tools.extend(profile_tools)
+            # Глобальный режим: получаем ВСЕ инструменты из базы
+            # Используем новый метод или исправляем существующий
+            try:
+                # Способ 1: Используем прямой доступ к базе через сервис
+                tools = self.tool_service.get_all_tools()
+            except AttributeError:
+                # Способ 2: Если метода нет, используем обходной путь
+                tools = self._get_all_tools_fallback()
+        
+        if not tools:
+            logger.warning(f"No tools found. Profile ID: {self.profile_id}")
+            # Можно показать информационное сообщение
+            if len(self.tools_tree.get_children()) == 0:
+                self.tools_tree.insert("", "end", values=("", "No tools found", "", "", "", "", "", ""))
+            return
         
         # Добавляем инструменты в таблицу
         for tool in tools:
             # Получаем имя профиля
-            profile_name = "Unknown"
+            profile_name = "Unassigned"
             if tool.profile_id:
                 profile = self.profile_service.get_profile(tool.profile_id)
                 if profile:
@@ -348,6 +379,27 @@ class ToolManager:
         
         # Apply filters after loading tools
         self.apply_filters()
+    
+    def _get_all_tools_fallback(self):
+        """Обходной способ получения всех инструментов, если метода нет"""
+        tools = []
+        try:
+            # Получаем все профили
+            profiles = self.profile_service.get_all_profiles()
+            for profile in profiles:
+                profile_tools = self.tool_service.get_tools_by_profile(profile.id)
+                tools.extend(profile_tools)
+            
+            # Также получаем инструменты без профиля
+            # Нужно проверить, есть ли такой метод в tool_service
+            if hasattr(self.tool_service, 'get_unassigned_tools'):
+                unassigned_tools = self.tool_service.get_unassigned_tools()
+                tools.extend(unassigned_tools)
+                
+        except Exception as e:
+            logger.error(f"Error loading all tools: {e}")
+        
+        return tools
     
     def apply_filters(self):
         """Applies filters to the tools table"""
@@ -421,9 +473,10 @@ class ToolManager:
     
     def add_tool(self):
         """Добавляет новый инструмент"""
-        # Безопасность: проверяем права (опционально)
-        self._check_security('create_tool')
-        
+        if self.read_only:
+            show_error(self.window, "Read Only", "Cannot add tools in read-only mode")
+            return
+            
         ToolEditor(
             self.window,
             self.profile_service,
@@ -434,9 +487,10 @@ class ToolManager:
     
     def edit_selected_tool(self, event=None):
         """Редактирует выбранный инструмент"""
-        # Безопасность: проверяем права (опционально)
-        self._check_security('edit_tool')
-        
+        if self.read_only:
+            show_error(self.window, "Read Only", "Cannot edit tools in read-only mode")
+            return
+            
         selection = self.tools_tree.selection()
         if not selection:
             show_error(self.window, "Warning", "Please select a tool to edit")
@@ -469,10 +523,10 @@ class ToolManager:
     
     def delete_selected_tool(self):
         """Удаляет выбранный инструмент"""
-        # Безопасность: проверяем права (опционально)
-        if not self._check_security('delete_tool'):
+        if self.read_only:
+            show_error(self.window, "Read Only", "Cannot delete tools in read-only mode")
             return
-        
+            
         selection = self.tools_tree.selection()
         if not selection:
             return
@@ -486,16 +540,13 @@ class ToolManager:
         tool_code = values[1]
         profile_name = values[2] if len(values) > 2 else "Unknown"
         
-        # Безопасность: дополнительное подтверждение для удаления
-        if not self._confirm_critical_operation(
-            "Confirm Delete",
-            f"Delete tool '{tool_code}' from profile '{profile_name}'?\n"
-            f"This action cannot be undone."
-        ):
+        if not ask_yesno(self.window, "Confirm Delete",
+                        f"Delete tool '{tool_code}' from profile '{profile_name}'?\n"
+                        f"This action cannot be undone."):
             return
         
         # Находим и удаляем инструмент
-        tool = self.tools_service.get_tool_by_code(tool_code)
+        tool = self.tool_service.get_tool_by_code(tool_code)
         if not tool:
             show_error(self.window, "Error", "Tool not found")
             return
@@ -528,9 +579,6 @@ class ToolManager:
             # Активируем/деактивируем пункт меню для просмотра изображения
             self.context_menu.entryconfig("View Image", state='normal' if has_image else 'disabled')
             
-            # Безопасность: проверяем права для контекстного меню
-            self._update_context_menu_security()
-            
             # Показываем контекстное меню
             self.context_menu.tk_popup(event.x_root, event.y_root)
     
@@ -558,13 +606,13 @@ class ToolManager:
         if region == 'cell':
             column = self.tools_tree.identify_column(event.x)
             if column != '#1':  # Если клик не по колонке с изображением
-                self.edit_selected_tool()
+                if self.read_only:
+                    self.view_tool_details()
+                else:
+                    self.edit_selected_tool()
                 
     def view_tool_image(self):
         """Отображает изображение инструмента в новом окне"""
-        # Безопасность: проверяем права (опционально)
-        self._check_security('view_images')
-        
         selection = self.tools_tree.selection()
         if not selection:
             return
@@ -629,40 +677,83 @@ class ToolManager:
             logger.error(f"Ошибка при отображении изображения: {e}")
             show_error(self.window, "Ошибка", f"Не удалось отобразить изображение: {e}")
     
-    # ========== БЕЗОПАСНОСТЬ: ДОБАВЛЕННЫЕ МЕТОДЫ ==========
-    
-    def _check_security(self, action: str) -> bool:
-        """
-        Проверка безопасности (можно активировать позже)
-        Сейчас возвращает True для обратной совместимости
-        """
-        # TODO: Реализовать проверку через SecurityManager когда будет готово
-        # try:
-        #     from config.security import SecurityManager
-        #     security_manager = SecurityManager()
-        #     if hasattr(self, 'current_user'):
-        #         return security_manager.check_permission(action, self.current_user)
-        # except ImportError:
-        #     pass
+    def view_tool_details(self):
+        """Показывает детальную информацию об инструменте (только чтение)"""
+        selection = self.tools_tree.selection()
+        if not selection:
+            show_error(self.window, "Warning", "Please select a tool to view details")
+            return
         
-        return True  # По умолчанию разрешаем все для обратной совместимости
+        item = self.tools_tree.item(selection[0])
+        values = item["values"]
+        
+        if not values:
+            show_error(self.window, "Error", "No tool data in selected row")
+            return
+        
+        # Находим инструмент по коду
+        tool_code = values[1]
+        tool = self.tool_service.get_tool_by_code(tool_code)
+        
+        if not tool:
+            show_error(self.window, "Error", f"Tool with code '{tool_code}' not found")
+            return
+        
+        # Создаем окно с деталями (только для чтения)
+        self._show_tool_details_dialog(tool, values[2] if len(values) > 2 else "Unknown")
     
-    def _confirm_critical_operation(self, title: str, message: str) -> bool:
-        """
-        Подтверждение критических операций
-        """
-        # TODO: Использовать SecurityManager.confirm_critical_operation
-        return ask_yesno(self.window, title, message)
-    
-    def _update_context_menu_security(self):
-        """
-        Обновление контекстного меню в зависимости от прав
-        Сейчас не делает ничего для обратной совместимости
-        """
-        # TODO: Реализовать когда SecurityManager будет готов
-        # Пример:
-        # can_edit = self._check_security('edit_tool')
-        # can_delete = self._check_security('delete_tool')
-        # self.context_menu.entryconfig("Edit Tool", state='normal' if can_edit else 'disabled')
-        # self.context_menu.entryconfig("Delete Tool", state='normal' if can_delete else 'disabled')
-        pass
+    def _show_tool_details_dialog(self, tool: Tool, profile_name: str):
+        """Показывает диалог с деталями инструмента"""
+        details_window = tk.Toplevel(self.window)
+        details_window.title(f"Tool Details - {tool.code}")
+        details_window.geometry("400x500")
+        details_window.transient(self.window)
+        details_window.resizable(False, False)
+        
+        # Основной фрейм
+        main_frame = ttk.Frame(details_window, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Заголовок
+        ttk.Label(
+            main_frame, 
+            text=f"Tool: {tool.code}",
+            font=("Arial", 14, "bold")
+        ).pack(pady=(0, 15))
+        
+        # Создаем фрейм для деталей
+        details_frame = ttk.Frame(main_frame)
+        details_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Отображаем детали
+        details = [
+            ("Profile:", profile_name),
+            ("Position:", tool.position),
+            ("Type:", tool.tool_type),
+            ("Set Number:", tool.set_number),
+            ("Knives Count:", tool.knives_count),
+            ("Status:", tool.status),
+            ("Description:", tool.description if tool.description else "N/A"),
+            ("Notes:", tool.notes if tool.notes else "N/A")
+        ]
+        
+        for label, value in details:
+            row_frame = ttk.Frame(details_frame)
+            row_frame.pack(fill=tk.X, pady=3)
+            
+            ttk.Label(row_frame, text=label, width=15, anchor=tk.W).pack(side=tk.LEFT)
+            ttk.Label(row_frame, text=str(value), anchor=tk.W).pack(side=tk.LEFT, padx=5)
+        
+        # Кнопка закрытия
+        ttk.Button(
+            main_frame,
+            text="Close",
+            command=details_window.destroy,
+            width=15
+        ).pack(pady=15)
+        
+        # Центрируем
+        details_window.update_idletasks()
+        x = (self.window.winfo_screenwidth() - details_window.winfo_width()) // 2
+        y = (self.window.winfo_screenheight() - details_window.winfo_height()) // 2
+        details_window.geometry(f"+{x}+{y}")

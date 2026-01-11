@@ -26,13 +26,13 @@ class SecurityConfig:
 
 class SecurityManager:
     def __init__(self):
-        self.config = AppConfig()
-        # Принудительно устанавливаем READ ONLY при старте
-        self._read_only = True
+        self.app_config = AppConfig()  # Переименовываем для ясности
         
-        # Перезаписываем конфигурацию чтобы следующее переключение работало
-        self.config.set('security_mode', 'read_only')
-        self.config.save()
+        # Загружаем текущий режим из конфигурации
+        current_mode = self.app_config.get('security_mode', 'read_only')
+        self._read_only = (current_mode == 'read_only')
+        
+        logger.info(f"Security mode initialized as: {'Read Only' if self._read_only else 'Full Access'}")
         
     def toggle_security_mode(self):
         """Переключает режим безопасности"""
@@ -40,57 +40,34 @@ class SecurityManager:
         
         # Сохраняем в конфигурацию
         mode = 'read_only' if self._read_only else 'full_access'
-        self.config.set('security_mode', mode)
-        self.config.save()
+        self.app_config.set('security_mode', mode)
+        self.app_config.save()
         
         # Логируем
         mode_text = 'Read Only' if self._read_only else 'Full Access'
         logger.info(f"Switched to {mode_text} mode")
         return self._read_only
     
-    def _load_config(self):
-        """Load security configuration"""
-        try:
-            if self.config_file.exists():
-                with open(self.config_file, 'r') as f:
-                    data = json.load(f)
-                    self.config.mode = data.get('mode', 'read_only')
-        except Exception as e:
-            logger.warning(f"Could not load security config: {e}")
-    
-    def _save_config(self):
-        """Save security configuration"""
-        try:
-            self.config_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_file, 'w') as f:
-                json.dump(asdict(self.config), f, indent=2)
-        except Exception as e:
-            logger.error(f"Could not save security config: {e}")
-    
     def is_read_only(self) -> bool:
         """Check if in read-only mode"""
-        # Используем текущее состояние _read_only или проверяем конфиг
-        if hasattr(self, '_read_only'):
-            return self._read_only
-        # Fallback: проверяем конфигурацию
-        return self.config.get('security_mode', 'read_only') == "read_only"
+        return self._read_only
     
     def is_full_access(self) -> bool:
         """Check if in full access mode"""
-        return not self.is_read_only()
+        return not self._read_only
     
     def set_full_access(self):
         """Switch to full access mode"""
         self._read_only = False
-        self.config.set('security_mode', 'full_access')
-        self.config.save()
+        self.app_config.set('security_mode', 'full_access')
+        self.app_config.save()
         logger.info("Switched to Full Access mode")
     
     def set_read_only(self):
         """Switch to read-only mode"""
         self._read_only = True
-        self.config.set('security_mode', 'read_only')
-        self.config.save()
+        self.app_config.set('security_mode', 'read_only')
+        self.app_config.save()
         logger.info("Switched to Read Only mode")
     
     def toggle_mode(self):
@@ -100,3 +77,7 @@ class SecurityManager:
         else:
             self.set_read_only()
         return self.is_full_access()
+    
+    def get_current_mode(self) -> str:
+        """Get current mode as string"""
+        return 'read_only' if self._read_only else 'full_access'

@@ -383,8 +383,8 @@ class WeinigHydromatManager:
             header_frame,
             text="[READ ONLY]" if self.security.is_read_only() else "[FULL ACCESS]",
             font=('Arial', 10, 'bold'),
-            fg='blue' if self.security.is_read_only() else 'green',
-            bg='white'
+            fg='green' if self.security.is_read_only() else 'red',  # Зеленый для READ ONLY, красный для FULL ACCESS
+            bg='SystemButtonFace'  # Используем системный цвет фона вместо белого
         )
         self.security_mode_label.pack(side=tk.RIGHT, padx=(0, 20))
         
@@ -1372,12 +1372,12 @@ class WeinigHydromatManager:
             if is_read_only:
                 self.security_mode_label.config(
                     text="[READ ONLY]",
-                    fg='blue'
+                    fg='green'  # Зеленый для READ ONLY
                 )
             else:
                 self.security_mode_label.config(
                     text="[FULL ACCESS]",
-                    fg='green'
+                    fg='red'    # Красный для FULL ACCESS
                 )
         
         # Обновляем состояние кнопок
@@ -1486,3 +1486,4 @@ class ToolImageViewer(tk.Toplevel):
         except Exception as e:
             logger.error(f"Error displaying tool image: {e}")
             show_error(self, "Error", f"Could not display image: {e}")
+

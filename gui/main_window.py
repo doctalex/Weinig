@@ -1395,8 +1395,7 @@ class WeinigHydromatManager:
         if hasattr(self, 'assign_tool_btn'):
             self.assign_tool_btn.config(state=button_state)
         if hasattr(self, 'manage_tools_btn'):
-            # ИЗМЕНЯЕМ: В READ ONLY режиме кнопка должна быть активна
-            # для просмотра инструментов профиля
+            # В READ ONLY режиме кнопка должна быть активна для просмотра
             self.manage_tools_btn.config(state=tk.NORMAL)
             if is_read_only:
                 self.manage_tools_btn.config(
@@ -1410,8 +1409,7 @@ class WeinigHydromatManager:
                 )
         
         if hasattr(self, 'library_btn'):
-            # ИЗМЕНЯЕМ: В READ ONLY режиме кнопка должна быть активна
-            # для просмотра глобальной библиотеки
+            # В READ ONLY режиме кнопка должна быть активна для просмотра
             self.library_btn.config(state=tk.NORMAL)
             if is_read_only:
                 self.library_btn.config(
@@ -1424,7 +1422,7 @@ class WeinigHydromatManager:
                     activebackground='darkviolet'
                 )
         
-        # Кнопка SAVE JOB всегда доступна (зеленый цвет)
+        # Кнопка SAVE JOB всегда доступна (голубой цвет)
         if hasattr(self, 'save_job_btn'):
             self.save_job_btn.config(state=tk.NORMAL)
             self.save_job_btn.config(
@@ -1486,4 +1484,5 @@ class ToolImageViewer(tk.Toplevel):
         except Exception as e:
             logger.error(f"Error displaying tool image: {e}")
             show_error(self, "Error", f"Could not display image: {e}")
+
 

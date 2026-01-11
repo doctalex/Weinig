@@ -733,8 +733,7 @@ class ToolManager:
             ("Set Number:", tool.set_number),
             ("Knives Count:", tool.knives_count),
             ("Status:", tool.status),
-            ("Description:", tool.description if tool.description else "N/A"),
-            ("Notes:", tool.notes if tool.notes else "N/A")
+            ("Notes:", tool.notes if tool.notes else "N/A"),  # ИСПРАВЛЕНО: используем notes
         ]
         
         for label, value in details:

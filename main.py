@@ -42,6 +42,8 @@ if sys.version_info < (3, 8):
 try:
     from config.app_config import init_config, get_config
     from gui.main_window import WeinigHydromatManager
+    # ДОБАВЛЯЕМ ИМПОРТ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
+    from config.security import SecurityManager
 except ImportError as e:
     error_msg = f"Failed to import required modules: {e}"
     print(error_msg)
@@ -122,6 +124,40 @@ def check_dependencies():
     
     return True
 
+def toggle_security_mode(root, security, app):
+    """Переключение между режимами Read Only и Full Access"""
+    if security.toggle_mode():  # Переключились в Full Access
+        messagebox.showinfo(
+            "Security Mode", 
+            "Full Access mode activated!\n\n"
+            "All editing functions are now enabled."
+        )
+        root.title("Weinig Hydromat Tool Manager [FULL ACCESS]")
+    else:  # Переключились в Read Only
+        messagebox.showinfo(
+            "Security Mode",
+            "Read Only mode activated.\n\n"
+            "Editing functions are disabled."
+        )
+        root.title("Weinig Hydromat Tool Manager [READ ONLY]")
+    
+    # Уведомляем главное окно о смене режима
+    if hasattr(app, 'on_security_mode_change'):
+        app.on_security_mode_change()
+    
+    return "break"  # Предотвращаем стандартную обработку
+
+def setup_security_hotkeys(root, security, app):
+    """Настройка горячих клавиш для управления режимами безопасности"""
+    def on_toggle_security(event=None):
+        return toggle_security_mode(root, security, app)
+    
+    # Привязка горячих клавиш Ctrl+Shift+F
+    root.bind('<Control-Shift-F>', on_toggle_security)
+    root.bind('<Control-Shift-f>', on_toggle_security)  # Для lowercase
+    
+    return on_toggle_security
+
 def main():
     """Main application function"""
     # Configure logging
@@ -141,6 +177,10 @@ def main():
         logger.error(f"Error loading configuration: {e}")
         # Create default configuration
         config = init_config()
+    
+    # Инициализация менеджера безопасности (НОВОЕ)
+    security = SecurityManager()
+    logger.info(f"Security mode initialized: {security.config.mode}")
     
     # Create main window
     root = tk.Tk()
@@ -166,10 +206,19 @@ def main():
     except Exception as e:
         logger.warning(f"Could not set theme: {e}")
     
+    # Установка начального заголовка в зависимости от режима (НОВОЕ)
+    if security.is_full_access():
+        root.title("Weinig Hydromat Tool Manager [FULL ACCESS]")
+    else:
+        root.title("Weinig Hydromat Tool Manager [READ ONLY]")
+    
     # Create and run the application
     try:
         app = WeinigHydromatManager(root)
         logger.info("Application started successfully")
+        
+        # Настройка горячих клавиш безопасности (НОВОЕ)
+        setup_security_hotkeys(root, security, app)
         
         # Handle window closing
         def on_closing():

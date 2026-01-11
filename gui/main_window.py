@@ -938,10 +938,10 @@ class WeinigHydromatManager:
             show_warning(self.root, "Warning", "Please select a profile first")
             return
         
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        # ПРОВЕРКА ДОСТУПА (НОВОЕ) - только для редактирования
         if self.security.is_read_only():
             show_warning(self.root, "Access Denied", 
-                        "This function is not available in Read Only mode.\n\n"
+                        "Cannot assign tools in Read Only mode.\n\n"
                         "Press Ctrl+Shift+F to switch to Full Access mode.")
             return
 
@@ -1262,35 +1262,35 @@ class WeinigHydromatManager:
             show_warning(self.root, "Warning", "Please select a profile first")
             return
         
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
-        if self.security.is_read_only():
-            show_warning(self.root, "Access Denied", 
-                        "Cannot manage tools in Read Only mode.\n\n"
-                        "Press Ctrl+Shift+F to switch to Full Access mode.")
-            return
+        # ИЗМЕНЯЕМ: В READ ONLY режиме разрешаем просмотр инструментов профиля
+        read_only = self.security.is_read_only()
         
         ToolManager(
             self.root,
             self.profile_service,
             self.tool_service,
             self.current_profile_id,
-            callback=self.load_profile_tools
+            callback=self.load_profile_tools,
+            read_only=read_only  # Передаем режим только для чтения
         )
     
     def open_global_library(self):
         """Открывает глобальную библиотеку инструментов"""
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
-        if self.security.is_read_only():
-            show_warning(self.root, "Access Denied", 
-                        "Cannot access tool library in Read Only mode.\n\n"
-                        "Press Ctrl+Shift+F to switch to Full Access mode.")
-            return
+        # ИЗМЕНЯЕМ: В READ ONLY режиме разрешаем просмотр библиотеки инструментов
+        read_only = self.security.is_read_only()
+        
+        # Если в режиме READ ONLY, показываем информационное сообщение
+        if read_only:
+            show_info(self.root, "Information", 
+                     "Opening Global Tool Library in READ ONLY mode.\n"
+                     "You can view all tools but cannot modify them.")
         
         ToolManager(
             self.root,
             self.profile_service,
             self.tool_service,
-            callback=self.load_profile_tools
+            callback=self.load_profile_tools,
+            read_only=read_only  # Передаем режим только для чтения
         )
     
     def save_all(self):
@@ -1299,6 +1299,8 @@ class WeinigHydromatManager:
             show_warning(self.root, "Warning", "Please select a profile first")
             return
         
+        # SAVE JOB должен быть доступен в любом режиме
+        # (это операция чтения/экспорта, а не записи)
         profile = self.profile_service.get_current_profile()
         if not profile:
             return
@@ -1381,7 +1383,7 @@ class WeinigHydromatManager:
         # Обновляем состояние кнопок
         button_state = tk.NORMAL if not is_read_only else tk.DISABLED
         
-        # Кнопки профилей
+        # Кнопки профилей (доступны только в FULL ACCESS)
         if hasattr(self, 'add_profile_btn'):
             self.add_profile_btn.config(state=button_state)
         if hasattr(self, 'edit_profile_btn'):
@@ -1389,17 +1391,46 @@ class WeinigHydromatManager:
         if hasattr(self, 'delete_profile_btn'):
             self.delete_profile_btn.config(state=button_state)
         
-        # Кнопки инструментов
+        # Кнопки инструментов (доступны только в FULL ACCESS)
         if hasattr(self, 'assign_tool_btn'):
             self.assign_tool_btn.config(state=button_state)
         if hasattr(self, 'manage_tools_btn'):
-            self.manage_tools_btn.config(state=button_state)
-        if hasattr(self, 'library_btn'):
-            self.library_btn.config(state=button_state)
+            # ИЗМЕНЯЕМ: В READ ONLY режиме кнопка должна быть активна
+            # для просмотра инструментов профиля
+            self.manage_tools_btn.config(state=tk.NORMAL)
+            if is_read_only:
+                self.manage_tools_btn.config(
+                    bg='#CCCCCC',  # Серый цвет для READ ONLY
+                    activebackground='#999999'
+                )
+            else:
+                self.manage_tools_btn.config(
+                    bg='#FF9800',  # Оранжевый цвет для FULL ACCESS
+                    activebackground='darkorange'
+                )
         
-        # Кнопка SAVE JOB всегда доступна
+        if hasattr(self, 'library_btn'):
+            # ИЗМЕНЯЕМ: В READ ONLY режиме кнопка должна быть активна
+            # для просмотра глобальной библиотеки
+            self.library_btn.config(state=tk.NORMAL)
+            if is_read_only:
+                self.library_btn.config(
+                    bg='#CCCCCC',  # Серый цвет для READ ONLY
+                    activebackground='#999999'
+                )
+            else:
+                self.library_btn.config(
+                    bg='#9C27B0',  # Фиолетовый цвет для FULL ACCESS
+                    activebackground='darkviolet'
+                )
+        
+        # Кнопка SAVE JOB всегда доступна (зеленый цвет)
         if hasattr(self, 'save_job_btn'):
             self.save_job_btn.config(state=tk.NORMAL)
+            self.save_job_btn.config(
+                bg='#00BCD4',  # Голубой цвет
+                activebackground='darkcyan'
+            )
 
 
 class ToolImageViewer(tk.Toplevel):

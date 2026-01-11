@@ -379,12 +379,15 @@ class WeinigHydromatManager:
         ).pack(side=tk.RIGHT)
         
         # ДОБАВЛЯЕМ ИНДИКАТОР РЕЖИМА БЕЗОПАСНОСТИ (НОВОЕ)
+        style = ttk.Style()
+        bg_color = style.lookup('TLabel', 'background') or 'SystemButtonFace'
+        
         self.security_mode_label = tk.Label(
             header_frame,
             text="[READ ONLY]" if self.security.is_read_only() else "[FULL ACCESS]",
             font=('Arial', 10, 'bold'),
-            fg='green' if self.security.is_read_only() else 'red',  # Зеленый для READ ONLY, красный для FULL ACCESS
-            bg='SystemButtonFace'  # Используем системный цвет фона вместо белого
+            fg='green' if self.security.is_read_only() else 'red',
+            bg=bg_color
         )
         self.security_mode_label.pack(side=tk.RIGHT, padx=(0, 20))
         
@@ -1484,5 +1487,6 @@ class ToolImageViewer(tk.Toplevel):
         except Exception as e:
             logger.error(f"Error displaying tool image: {e}")
             show_error(self, "Error", f"Could not display image: {e}")
+
 
 

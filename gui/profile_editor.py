@@ -1,5 +1,5 @@
 """
-Редактор профилей - полная исправленная версия
+Редактор профилей с поддержкой PDF
 """
 import os
 import json
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class ProfileEditor:
-    """Окно редактирования профиля - полная версия"""
+    """Окно редактирования профиля с поддержкой PDF"""
     
     def __init__(self, parent, profile_service: ProfileService, 
                 profile: Optional[Profile] = None, callback=None):
@@ -29,7 +29,11 @@ class ProfileEditor:
         self.profile_service = profile_service
         self.profile = profile
         self.callback = callback
-        self.image_data = None
+        
+        # PDF данные вместо изображения
+        self.pdf_data = None
+        self.pdf_filename = None
+        
         self.is_editing = profile is not None
         
         self.setup_ui()
@@ -192,26 +196,48 @@ class ProfileEditor:
         product_entry = ttk.Entry(size_frame, textvariable=self.product_var, width=15)
         product_entry.pack(side=tk.LEFT, padx=(5, 0))
         
-        # Изображение (уменьшенная и зафиксированная область)
-        image_frame = ttk.LabelFrame(parent, text="Profile Image", padding="10")
-        image_frame.pack(fill=tk.X, pady=(0, 10))
+        # PDF документ вместо изображения
+        pdf_frame = ttk.LabelFrame(parent, text="Profile Document (PDF)", padding="10")
+        pdf_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Кнопки управления изображением
-        image_btn_frame = ttk.Frame(image_frame)
-        image_btn_frame.pack(fill=tk.X, pady=(0, 5))
+        # Кнопки управления PDF
+        pdf_btn_frame = ttk.Frame(pdf_frame)
+        pdf_btn_frame.pack(fill=tk.X, pady=(0, 5))
         
-        ttk.Button(image_btn_frame, text="Browse Image", 
-                command=self.browse_image).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(image_btn_frame, text="Remove Image", 
-                command=self.remove_image).pack(side=tk.LEFT)
+        ttk.Button(pdf_btn_frame, text="Upload PDF Document", 
+                command=self.upload_pdf).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(pdf_btn_frame, text="Remove PDF", 
+                command=self.remove_pdf).pack(side=tk.LEFT)
         
-        # Image preview with fixed size container
-        preview_container = ttk.Frame(image_frame, width=200, height=150)
-        preview_container.pack_propagate(False)  # Prevent container from resizing
-        preview_container.pack(pady=5)
-        # Create ImagePreview with smaller dimensions
-        self.image_preview = ImagePreview(preview_container, width=180, height=120)
-        self.image_preview.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        # Статус PDF
+        self.pdf_status_label = ttk.Label(
+            pdf_frame,
+            text="No PDF document loaded",
+            foreground="gray",
+            font=("Arial", 9)
+        )
+        self.pdf_status_label.pack(anchor=tk.W, pady=(0, 5))
+        
+        # Предпросмотр первой страницы PDF
+        preview_container = ttk.LabelFrame(pdf_frame, text="PDF Preview (First Page)", padding="10")
+        preview_container.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        
+        preview_inner = ttk.Frame(preview_container, width=200, height=150)
+        preview_inner.pack_propagate(False)  # Prevent container from resizing
+        preview_inner.pack(pady=5)
+        
+        # Image preview для показа первой страницы PDF
+        self.pdf_preview = ImagePreview(preview_inner, width=180, height=120)
+        self.pdf_preview.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+        
+        # Подсказка
+        info_label = ttk.Label(
+            pdf_frame,
+            text="Double-click preview to open PDF in viewer",
+            foreground="blue",
+            font=("Arial", 8, "italic")
+        )
+        info_label.pack(anchor=tk.W, pady=(5, 0))
     
     def _setup_buttons(self, parent):
         """Настройка кнопок - размещаем по центру внизу"""
@@ -301,21 +327,27 @@ class ProfileEditor:
         self.material_var.set(self.profile.material_size)
         self.product_var.set(self.profile.product_size)
         
-        # Загружаем изображение
+        # Загружаем статус PDF
+        if self.profile.has_pdf:
+            self.pdf_status_label.config(
+                text=f"PDF: {os.path.basename(self.profile.pdf_path)}",
+                foreground="green"
+            )
+        
+        # Загружаем превью PDF
         if self.profile.image_data:
-            self.image_data = self.profile.image_data
-            self.image_preview.set_image(self.image_data)
+            self.pdf_preview.set_image(self.profile.image_data)
     
-    def browse_image(self):
-        """Выбирает изображение профиля"""
-        # Безопасность: проверяем права загрузки изображений
-        if not self._check_security('upload_images'):
+    def upload_pdf(self):
+        """Выбирает PDF файл профиля"""
+        # Безопасность: проверяем права загрузки PDF
+        if not self._check_security('upload_documents'):
             return
         
         filename = filedialog.askopenfilename(
-            title="Select Profile Image",
+            title="Select PDF Document",
             filetypes=[
-                ("Image files", "*.png *.jpg *.jpeg *.bmp"),
+                ("PDF files", "*.pdf"),
                 ("All files", "*.*")
             ],
             parent=self.window
@@ -323,37 +355,80 @@ class ProfileEditor:
         
         if filename:
             try:
-                # TODO: Добавить проверку файла через SecurityManager
-                # Пример:
-                # if not self._scan_file_for_security(filename):
-                #     show_error(self.window, "Security Error", "Файл содержит потенциальные угрозы")
-                #     return
+                # Проверяем расширение файла
+                if not filename.lower().endswith('.pdf'):
+                    show_error(self.window, "Error", "Please select a PDF file (.pdf)")
+                    return
                 
+                # Проверяем размер файла (максимум 50MB)
+                file_size = os.path.getsize(filename)
+                if file_size > 50 * 1024 * 1024:  # 50MB
+                    show_error(self.window, "Error", "PDF file is too large. Maximum size is 50MB.")
+                    return
+                
+                # Загружаем PDF
                 with open(filename, "rb") as f:
-                    self.image_data = f.read()
+                    self.pdf_data = f.read()
                 
-                self.image_preview.set_image(self.image_data)
+                self.pdf_filename = os.path.basename(filename)
                 
-                # TODO: Логирование загрузки изображения
-                # self._log_security_action('upload_image', f'Загружено изображение: {os.path.basename(filename)}')
+                # Извлекаем превью из PDF
+                try:
+                    from utils.pdf_manager import PDFManager
+                    pdf_manager = PDFManager()
+                    preview = pdf_manager.extract_pdf_preview(self.pdf_data)
+                    
+                    if preview:
+                        self.pdf_preview.set_image(preview)
+                        self.pdf_status_label.config(
+                            text=f"PDF: {self.pdf_filename}",
+                            foreground="green"
+                        )
+                        
+                        # Показываем информацию о файле
+                        show_info(self.window, "PDF Loaded", 
+                                 f"PDF document loaded successfully:\n"
+                                 f"File: {self.pdf_filename}\n"
+                                 f"Size: {file_size:,} bytes")
+                    else:
+                        show_error(self.window, "Warning", 
+                                 "Could not extract preview from PDF.\n"
+                                 "The file may be corrupted or protected.")
+                        self.pdf_data = None
+                        self.pdf_filename = None
+                        
+                except ImportError:
+                    show_error(self.window, "Error", 
+                             "PyMuPDF library is not installed.\n"
+                             "Please install it: pip install PyMuPDF")
+                    self.pdf_data = None
+                    self.pdf_filename = None
                 
             except Exception as e:
-                show_error(self.window, "Error", f"Could not load image: {e}")
+                show_error(self.window, "Error", f"Could not load PDF: {e}")
+                self.pdf_data = None
+                self.pdf_filename = None
+                self.pdf_status_label.config(text="No PDF loaded", foreground="gray")
     
-    def remove_image(self):
-        """Удаляет изображение профиля"""
+    def remove_pdf(self):
+        """Удаляет PDF документ профиля"""
         # Безопасность: проверяем права
         if not self._check_security('modify_profile'):
             return
         
-        self.image_data = None
-        self.image_preview.clear()
+        self.pdf_data = None
+        self.pdf_filename = None
+        self.pdf_preview.clear()
+        self.pdf_status_label.config(
+            text="No PDF document loaded",
+            foreground="gray"
+        )
         
-        # TODO: Логирование удаления изображения
-        # self._log_security_action('remove_image', 'Удалено изображение профиля')
+        # TODO: Логирование удаления PDF
+        # self._log_security_action('remove_pdf', 'Удален PDF документ профиля')
     
     def save(self):
-        """Сохраняет профиль"""
+        """Сохраняет профиль с PDF"""
         # Безопасность: проверяем права сохранения
         if not self._check_security('create_profile' if not self.is_editing else 'edit_profile'):
             return
@@ -369,7 +444,12 @@ class ProfileEditor:
                 return
 
             description = self.desc_text.get("1.0", tk.END).strip()
-            feed_rate = float(self.feed_var.get())
+            
+            try:
+                feed_rate = float(self.feed_var.get())
+            except ValueError:
+                feed_rate = 30.0  # Значение по умолчанию
+            
             material_size = self.material_var.get().strip()
             product_size = self.product_var.get().strip()
 
@@ -385,7 +465,7 @@ class ProfileEditor:
                 "feed_rate": feed_rate,
                 "material_size": material_size,
                 "product_size": product_size,
-                "has_image": bool(self.image_data),
+                "has_pdf": bool(self.pdf_data),
                 "tool_assignments": {}  # Add empty tool assignments as they're not available here
             }
 
@@ -409,7 +489,7 @@ class ProfileEditor:
             print("Profile change logged successfully")
 
             if self.is_editing and self.profile:
-                # Update existing profile
+                # Update existing profile with PDF
                 success = self.profile_service.update_profile(
                     self.profile.id,
                     name=name,
@@ -417,18 +497,20 @@ class ProfileEditor:
                     feed_rate=feed_rate,
                     material_size=material_size,
                     product_size=product_size,
-                    image_data=self.image_data
+                    pdf_data=self.pdf_data,
+                    pdf_filename=self.pdf_filename
                 )
                 action = "updated"
             else:
-                # Create new profile
+                # Create new profile with PDF
                 profile_id = self.profile_service.create_profile(
                     name=name,
                     description=description,
                     feed_rate=feed_rate,
                     material_size=material_size,
                     product_size=product_size,
-                    image_data=self.image_data
+                    pdf_data=self.pdf_data,
+                    pdf_filename=self.pdf_filename
                 )
                 success = profile_id is not None
                 action = "created"
@@ -452,6 +534,9 @@ class ProfileEditor:
 
         except ValueError as ve:
             messagebox.showerror("Input Error", f"Invalid input: {str(ve)}")
+        except PermissionError as pe:
+            # Ошибка режима безопасности
+            messagebox.showerror("Access Denied", str(pe))
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             import traceback

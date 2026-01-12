@@ -1,5 +1,5 @@
 """
-Главное окно приложения
+Главное окно приложения с поддержкой PDF для профилей
 """
 import os
 import tkinter as tk
@@ -139,8 +139,8 @@ class WeinigHydromatManager:
         self.material_size_var.set(profile.material_size or "Not specified")
         self.product_size_var.set(profile.product_size or "Not specified")
         
-        # Загружаем изображение
-        self._load_profile_image(profile.image_data)
+        # Загружаем превью PDF (первая страница)
+        self._load_profile_preview(profile.get_preview())
         
         # Загружаем инструменты
         self.load_profile_tools()
@@ -418,49 +418,78 @@ class WeinigHydromatManager:
         
         self._setup_controls(controls_frame)
     
-    def _load_profile_image(self, image_data: Optional[bytes]):
-        """Загружает изображение профиля"""
-        # Clear any existing image
+    def _load_profile_preview(self, image_data: Optional[bytes]):
+        """Загружает превью профиля (первая страница PDF или изображение)"""
+        # Очищаем текущее изображение
         if hasattr(self, 'profile_image_label'):
             self.profile_image_label.config(image='', text='')
         
-        # If no image data, show placeholder
+        # Если нет данных для превью
         if not image_data:
             if hasattr(self, 'profile_image_label'):
-                self.profile_image_label.config(text='No Image', bg='white')
+                profile = self.profile_service.get_current_profile()
+                if profile and profile.has_pdf:
+                    # Есть PDF, но не удалось извлечь превью
+                    self.profile_image_label.config(
+                        text='PDF Document\n(Double-click to open)',
+                        bg="white",
+                        font=("Arial", 10)
+                    )
+                else:
+                    # Нет PDF документа
+                    self.profile_image_label.config(
+                        text='No Document',
+                        bg="white",
+                        font=("Arial", 10)
+                    )
             return
         
         try:
             from PIL import Image, ImageTk
             import io
             
-            # Open the image
+            # Открываем изображение превью
             img = Image.open(io.BytesIO(image_data))
             
-            # Resize the image to fit in the UI
+            # Ресайз для UI
             max_size = (200, 200)
-            img.thumbnail(max_size, RESAMPLE)
+            img.thumbnail(max_size, Image.LANCZOS)
             
-            # Convert to Tkinter format
+            # Конвертируем в Tkinter формат
             photo = ImageTk.PhotoImage(img)
             
-            # Create or update the image label
+            # Создаем или обновляем лейбл
             if not hasattr(self, 'profile_image_label'):
                 self.profile_image_label = ttk.Label(self.profile_image_frame, image=photo)
                 self.profile_image_label.image = photo  # Keep a reference
                 self.profile_image_label.pack(expand=True, fill='both')
             else:
                 self.profile_image_label.config(image=photo)
-                self.profile_image_label.image = photo  # Keep a reference
+                self.profile_image_label.image = photo
+            
+            # Настраиваем курсор и текст
+            profile = self.profile_service.get_current_profile()
+            if profile and profile.has_pdf:
+                # PDF документ - двойной клик открывает PDF
+                self.profile_image_label.config(
+                    cursor="hand2",
+                    text=""
+                )
+            else:
+                # Простое изображение - обычный курсор
+                self.profile_image_label.config(
+                    cursor="arrow",
+                    text=""
+                )
                 
-        except ImportError:
-            if hasattr(self, 'profile_image_label'):
-                self.profile_image_label.config(text='Pillow not installed', bg='white')
-            logger.error("Pillow library is required for image display")
         except Exception as e:
+            logger.error(f"Error loading profile preview: {e}")
             if hasattr(self, 'profile_image_label'):
-                self.profile_image_label.config(text='Image Error', bg='white')
-            logger.error(f"Error loading profile image: {e}")
+                self.profile_image_label.config(
+                    text='Preview Error',
+                    bg="white",
+                    font=("Arial", 10)
+                )
     
     def _show_about(self, event=None):
         """Show the About dialog"""
@@ -519,8 +548,8 @@ class WeinigHydromatManager:
         text_frame = ttk.Frame(info_frame)
         text_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # Фрейм для изображения
-        self.profile_image_frame = ttk.LabelFrame(parent, text="Profile Image", padding=10)
+        # Фрейм для превью документа
+        self.profile_image_frame = ttk.LabelFrame(parent, text="Document Preview", padding=10)
         self.profile_image_frame.pack(side=tk.RIGHT, padx=10, pady=5, fill='both')
         
         # Название
@@ -573,13 +602,15 @@ class WeinigHydromatManager:
                      row=4, column=1, sticky=tk.W, pady=4, padx=(8, 0)
                  )
         
-        # Изображение профиля
+        # Контейнер для превью документа (PDF или изображения)
         self.profile_image_frame = ttk.Frame(info_frame, width=200, height=150)
         self.profile_image_frame.pack_propagate(False)  # Prevent resizing
         self.profile_image_frame.pack(side=tk.RIGHT, padx=(20, 0), pady=10)
+        
+        # Лейбл для превью
         self.profile_image_label = tk.Label(
             self.profile_image_frame,
-            text="No Image",
+            text="No Document",
             bg="white",
             font=self.small_font,
             anchor="center",
@@ -587,81 +618,46 @@ class WeinigHydromatManager:
             relief="sunken"
         )
         self.profile_image_label.pack(expand=True, fill=tk.BOTH)
-        self.profile_image_label.bind("<Double-Button-1>", self.show_profile_image_large)
+        
+        # Двойной клик открывает PDF или показывает увеличенное изображение
+        self.profile_image_label.bind("<Double-Button-1>", self.show_profile_document)
     
-    def update_profile_image(self, image_data=None):
-        """Обновляет изображение профиля"""
-        if image_data:
-            try:
-                # Store the original image data
-                if not hasattr(self.profile_image_label, 'image_data'):
-                    self.profile_image_label.image_data = image_data
-                else:
-                    self.profile_image_label.image_data = image_data
-                
-                # Calculate aspect ratio
-                img_ratio = img.width / img.height
-                max_width = 180
-                max_height = 130
-                
-                # Resize while maintaining aspect ratio
-                if img_ratio > 1:
-                    # Wide image
-                    new_width = min(img.width, max_width)
-                    new_height = int(new_width / img_ratio)
-                else:
-                    # Tall image
-                    new_height = min(img.height, max_height)
-                    new_width = int(new_height * img_ratio)
-                
-                img = img.resize((new_width, new_height), RESAMPLE)
-                photo = ImageTk.PhotoImage(img)
-                
-                self.profile_image_label.config(
-                    image=photo,
-                    text="",
-                    compound=tk.CENTER
-                )
-                self.profile_image_label.image = photo  # Keep a reference
-                
-            except Exception as e:
-                print(f"Error loading image: {e}")
-                self.profile_image_label.config(
-                    text="Image Error",
-                    image=''
-                )
-        else:
-            self.profile_image_label.config(
-                text="No Image",
-                image=''
-            )
-            if hasattr(self.profile_image_label, 'image'):
-                del self.profile_image_label.image
-    
-    def show_profile_image_large(self, event):
-        """Показывает изображение профиля в большом размере"""
+    def show_profile_document(self, event):
+        """Показывает PDF документ профиля или увеличенное изображение"""
         if not self.current_profile_id:
             return
 
         profile = self.profile_service.get_current_profile()
-        if not profile or not profile.image_data:
-            show_info(self.root, "Info", "No image available for this profile")
+        if not profile:
             return
-
+        
+        # Если есть PDF - открываем его во внешнем просмотрщике
+        if profile.has_pdf:
+            success = self.profile_service.open_profile_pdf(profile.id)
+            if not success:
+                show_error(self.root, "Error", 
+                          "Could not open PDF document.\n"
+                          "Make sure you have a PDF viewer installed.")
+        elif profile.get_preview():
+            # Нет PDF, но есть превью (изображение) - показываем увеличенное
+            self._show_preview_large(profile)
+        else:
+            # Нет ни PDF, ни превью
+            show_info(self.root, "Info", "No document available for this profile")
+    
+    def _show_preview_large(self, profile: Profile):
+        """Показывает увеличенное превью профиля"""
         try:
             from PIL import Image, ImageTk
             import io
-            import os
-            import tempfile
-            import subprocess
 
             # Create a new window
-            img_window = tk.Toplevel(self.root)
-            img_window.title(f"Profile Image - {profile.name}")
+            preview_window = tk.Toplevel(self.root)
+            preview_window.title(f"Profile Preview - {profile.name}")
 
             # Load and resize the image
-            img = Image.open(io.BytesIO(profile.image_data))
-            
+            img = Image.open(io.BytesIO(profile.get_preview()))
+
             # Limit the maximum display size
             max_size = (800, 600)
             img.thumbnail(max_size, RESAMPLE)
@@ -670,132 +666,31 @@ class WeinigHydromatManager:
             photo = ImageTk.PhotoImage(img)
 
             # Create and pack the image label
-            img_label = ttk.Label(img_window, image=photo)
+            img_label = ttk.Label(preview_window, image=photo)
             img_label.image = photo  # Keep a reference
             img_label.pack(padx=10, pady=10)
 
-            # Button frame
-            btn_frame = ttk.Frame(img_window)
-            btn_frame.pack(pady=(0, 10))
-
-            # Print button function
-            def print_image():
-                try:
-                    import tempfile
-                    import time
-                    from reportlab.lib.pagesizes import A4
-                    from reportlab.pdfgen import canvas
-                    from reportlab.lib.utils import ImageReader
-
-                    # Create a temporary PDF file for printing
-                    temp_dir = tempfile.gettempdir()
-                    timestamp = int(time.time())
-                    pdf_path = os.path.join(temp_dir, f"print_{timestamp}.pdf")
-                    img_path = os.path.join(temp_dir, f"print_{timestamp}.png")
-
-                    try:
-                        # Create a white background image with the same size as the original
-                        from PIL import Image, ImageDraw
-                        
-                        # Create a white background image
-                        background = Image.new('RGBA', img.size, 'WHITE')
-                        # Paste the original image onto the white background
-                        # This will handle transparency by blending with white
-                        background.paste(img, (0, 0), img)
-                        # Convert to RGB to remove alpha channel
-                        img_rgb = background.convert('RGB')
-                        # Save as PNG with white background
-                        img_rgb.save(img_path, 'PNG', dpi=(300, 300), quality=95)
-                        
-                        # Create a PDF with A4 size
-                        c = canvas.Canvas(pdf_path, pagesize=A4)
-                        width, height = A4
-                        
-                        # Calculate scaling to fit A4 while maintaining aspect ratio
-                        img_ratio = img.width / img.height
-                        a4_ratio = width / height
-                        
-                        if img_ratio > a4_ratio:
-                            # Image is wider than A4
-                            img_width = width - 50  # 25mm margins on each side
-                            img_height = img_width / img_ratio
-                        else:
-                            # Image is taller than A4
-                            img_height = height - 50  # 25mm top/bottom margins
-                            img_width = img_height * img_ratio
-                            
-                        # Center the image on the page
-                        x = (width - img_width) / 2
-                        y = (height - img_height) / 2
-                        
-                        # Add the image to the PDF
-                        c.drawImage(ImageReader(img_path), x, y, width=img_width, height=img_height)
-                        c.save()
-                        
-                        # Open the PDF for viewing
-                        os.startfile(pdf_path)
-                        # Then send it to the default printer
-                        if os.name == 'nt':
-                            os.startfile(pdf_path, "print")
-                        else:
-                            show_error(img_window, "Error", "Printing is only supported on Windows")
-                            
-                    except Exception as e:
-                        logger.error(f"Print error: {e}")
-                        show_error(img_window, "Print Error", f"Could not print: {e}")
-                    else:
-                        # Only show success message if no exception was raised
-                        show_info(img_window, "Success", "PDF has been created and sent to the printer")
-                        
-                    finally:
-                        # Clean up temporary files after a longer delay
-                        def cleanup():
-                            import time
-                            time.sleep(30)  # Wait 30 seconds before cleanup to ensure the file is released
-                            try:
-                                for file_path in [img_path, pdf_path]:
-                                    try:
-                                        if os.path.exists(file_path):
-                                            os.unlink(file_path)
-                                            logger.info(f"Successfully cleaned up: {file_path}")
-                                    except PermissionError as pe:
-                                        logger.warning(f"Could not delete {file_path} - file is still in use. It will be cleaned up on next system restart.")
-                                    except Exception as e:
-                                        logger.error(f"Error cleaning up {file_path}: {e}")
-                            except Exception as e:
-                                logger.error(f"Cleanup error: {e}")
-                        
-                        # Schedule cleanup with a longer delay
-                        img_window.after(60000, cleanup)  # 60 second delay before cleanup
-                            
-                except Exception as e:
-                    logger.error(f"Unexpected error: {e}")
-                    show_error(img_window, "Error", f"An unexpected error occurred: {e}")
-
-            # Add buttons
-            print_btn = ttk.Button(btn_frame, text="Print", command=print_image)
-            print_btn.pack(side=tk.LEFT, padx=5)
-        
-            close_btn = ttk.Button(btn_frame, text="Close", command=img_window.destroy)
-            close_btn.pack(side=tk.LEFT, padx=5)
+            # Add a close button
+            close_btn = ttk.Button(preview_window, text="Close", command=preview_window.destroy)
+            close_btn.pack(pady=(0, 10))
 
             # Center the window on screen
-            img_window.update_idletasks()
+            preview_window.update_idletasks()
             width = img.width + 40
-            height = img.height + 100  # Increased height for buttons
-            x = (img_window.winfo_screenwidth() - width) // 2
-            y = (img_window.winfo_screenheight() - height) // 2
-            img_window.geometry(f"{width}x{height}+{x}+{y}")
+            height = img.height + 70
+            x = (preview_window.winfo_screenwidth() - width) // 2
+            y = (preview_window.winfo_screenheight() - height) // 2
+            preview_window.geometry(f"{width}x{height}+{x}+{y}")
 
             # Make the window modal
-            img_window.transient(self.root)
-            img_window.grab_set()
+            preview_window.transient(self.root)
+            preview_window.grab_set()
 
         except ImportError:
-            show_error(self.root, "Error", f"Required libraries not found: {e}")
+            show_error(self.root, "Error", "Pillow library is required to display images")
         except Exception as e:
-            logger.error(f"Error displaying profile image: {e}")
-            show_error(self.root, "Error", f"Could not display image: {e}")
+            logger.error(f"Error displaying profile preview: {e}")
+            show_error(self.root, "Error", f"Could not display preview: {e}")
 
     def _setup_heads_table(self, parent):
         """Настройка таблицы голов"""
@@ -993,61 +888,6 @@ class WeinigHydromatManager:
         # Create and show the image viewer
         ToolImageViewer(self.root, tool)
 
-    def _show_profile_image_large(self, event):
-        """Показывает изображение профиля в большом размере"""
-        if not self.current_profile_id:
-            return
-
-        profile = self.profile_service.get_current_profile()
-        if not profile or not profile.image_data:
-            show_info(self.root, "Info", "No image available for this profile")
-            return
-
-        try:
-            from PIL import Image, ImageTk
-            import io
-
-            # Create a new window
-            img_window = tk.Toplevel(self.root)
-            img_window.title(f"Profile Image - {profile.name}")
-
-            # Load and resize the image
-            img = Image.open(io.BytesIO(profile.image_data))
-
-            # Limit the maximum display size
-            max_size = (800, 600)
-            img.thumbnail(max_size, RESAMPLE)
-
-            # Convert to Tkinter format
-            photo = ImageTk.PhotoImage(img)
-
-            # Create and pack the image label
-            img_label = ttk.Label(img_window, image=photo)
-            img_label.image = photo  # Keep a reference
-            img_label.pack(padx=10, pady=10)
-
-            # Add a close button
-            close_btn = ttk.Button(img_window, text="Close", command=img_window.destroy)
-            close_btn.pack(pady=(0, 10))
-
-            # Center the window on screen
-            img_window.update_idletasks()
-            width = img.width + 40
-            height = img.height + 70
-            x = (img_window.winfo_screenwidth() - width) // 2
-            y = (img_window.winfo_screenheight() - height) // 2
-            img_window.geometry(f"{width}x{height}+{x}+{y}")
-
-            # Make the window modal
-            img_window.transient(self.root)
-            img_window.grab_set()
-
-        except ImportError:
-            show_error(self.root, "Error", "Pillow library is required to display images")
-        except Exception as e:
-            logger.error(f"Error displaying profile image: {e}")
-            show_error(self.root, "Error", f"Could not display image: {e}")
-
     def load_profiles(self):
         """Загружает список профилей"""
         profiles = self.profile_service.get_all_profiles()
@@ -1165,7 +1005,7 @@ class WeinigHydromatManager:
         self.feed_rate_var.set("")
         self.material_size_var.set("")
         self.product_size_var.set("")
-        self.profile_image_label.config(image='', text='No Image')
+        self.profile_image_label.config(image='', text='No Document')
         
         for item in self.tools_tree.get_children():
             self.tools_tree.delete(item)
@@ -1440,12 +1280,6 @@ class WeinigHydromatManager:
             self.save_job_btn.config(
                 bg='#00BCD4',  # Голубый цвет
                 activebackground='darkcyan'
-            )
-        
-        # Обновляем отладочную информацию
-        if hasattr(self, 'debug_label'):
-            self.debug_label.config(
-                text=f"Current: {'READ ONLY' if is_read_only else 'FULL ACCESS'}"
             )
     
     # НОВЫЕ МЕТОДЫ ДЛЯ ПЕРЕКЛЮЧЕНИЯ РЕЖИМА БЕЗОПАСНОСТИ

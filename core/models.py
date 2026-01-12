@@ -4,15 +4,30 @@ from datetime import datetime
 
 @dataclass
 class Profile:
-    """Модель профиля обработки"""
+    """Модель профиля"""
     id: Optional[int] = None
     name: str = ""
     description: str = ""
-    feed_rate: float = 2.5
-    material_size: str = "100x100"
-    product_size: str = "90x90"
-    image_data: Optional[bytes] = None
-    created_at: datetime = field(default_factory=datetime.now)
+    feed_rate: Optional[float] = None
+    material_size: Optional[str] = None
+    product_size: Optional[str] = None
+    image_data: Optional[bytes] = None  # Превью PDF (первая страница)
+    pdf_path: Optional[str] = None      # Путь к PDF файлу
+    
+    @property
+    def has_pdf(self) -> bool:
+        """Проверяет, есть ли у профиля PDF файл"""
+        import os
+        return self.pdf_path is not None and os.path.exists(self.pdf_path)
+    
+    @property
+    def has_preview(self) -> bool:
+        """Проверяет, есть ли превью"""
+        return self.image_data is not None
+    
+    def get_preview(self) -> Optional[bytes]:
+        """Получает изображение для превью"""
+        return self.image_data
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for database"""

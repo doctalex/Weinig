@@ -1,27 +1,34 @@
 """
-Profile management service
+Profile management service with PDF support
 """
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
+from collections import defaultdict
 from core.database import DatabaseManager
 from core.models import Profile
 from core.observable import Observable
 
 # ДОБАВЛЯЕМ ИМПОРТ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
 from config.security import SecurityManager
+# ДОБАВЛЯЕМ ИМПОРТ PDF МЕНЕДЖЕРА
+from utils.pdf_manager import PDFManager
 
 logger = logging.getLogger(__name__)
 
 
 class ProfileService(Observable):
-    """Profile management service"""
+    """Profile management service with PDF support"""
     
     def __init__(self, db: DatabaseManager):
         super().__init__()
         self.db = db
         self.current_profile_id: Optional[int] = None
+        
         # ДОБАВЛЯЕМ ИНИЦИАЛИЗАЦИЮ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
         self.security = SecurityManager()
+        
+        # ДОБАВЛЯЕМ ИНИЦИАЛИЗАЦИЮ PDF МЕНЕДЖЕРА
+        self.pdf_manager = PDFManager()
     
     # === ВСПОМОГАТЕЛЬНЫЙ МЕТОД ДЛЯ ПРОВЕРКИ ДОСТУПА ===
     def _check_edit_permission(self) -> bool:
@@ -92,46 +99,282 @@ class ProfileService(Observable):
         self.current_profile_id = profile_id
         self.notify_observers('current_profile_changed', profile_id)
     
-    # === МЕТОДЫ РЕДАКТИРОВАНИЯ (добавляем проверки) ===
+    # === МЕТОДЫ РЕДАКТИРОВАНИЯ С ПОДДЕРЖКОЙ PDF ===
     
     def create_profile(self, name: str, description: str = '', 
                       feed_rate: float = 2.5, material_size: str = '100x100',
-                      product_size: str = '90x90', image_data: bytes = None) -> Optional[int]:
-        """Creates a new profile"""
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+                      product_size: str = '90x90', pdf_data: bytes = None, 
+                      pdf_filename: str = None) -> Optional[int]:
+        """Creates a new profile with PDF support"""
+        # ПРОВЕРКА ДОСТУПА
         self._raise_if_read_only()
         
         try:
+            # Сначала создаем профиль без PDF данных
             profile_id = self.db.add_profile(
-                name, description, feed_rate, material_size, product_size, image_data
+                name, description, feed_rate, material_size, product_size, 
+                image_data=None,  # Пока без превью
+                pdf_path=None     # Пока без пути
             )
+            
+            if not profile_id:
+                logger.error("Failed to create profile in database")
+                return None
+            
+            # Если предоставлен PDF - сохраняем его
+            if pdf_data:
+                success, pdf_path = self.pdf_manager.save_profile_pdf(
+                    profile_id, pdf_data, pdf_filename
+                )
+                
+                if not success:
+                    # Если не удалось сохранить PDF, удаляем профиль и возвращаем ошибку
+                    self.db.delete_profile(profile_id)
+                    logger.error(f"Failed to save PDF for profile {profile_id}")
+                    return None
+                
+                # Извлекаем превью из PDF
+                preview_image = self.pdf_manager.extract_pdf_preview(pdf_data)
+                
+                # Обновляем профиль с путем к PDF и превью
+                success = self.db.update_profile(
+                    profile_id=profile_id,
+                    name=name,
+                    description=description,
+                    feed_rate=feed_rate,
+                    material_size=material_size,
+                    product_size=product_size,
+                    image_data=preview_image,  # Превью первой страницы PDF
+                    pdf_path=pdf_path          # Путь к PDF файлу
+                )
+                
+                if not success:
+                    # Если не удалось обновить, удаляем профиль и PDF
+                    self.db.delete_profile(profile_id)
+                    self.pdf_manager.delete_profile_pdf(profile_id, pdf_path)
+                    logger.error(f"Failed to update profile {profile_id} with PDF data")
+                    return None
+            
+            # Уведомляем наблюдателей об успешном создании
             self.notify_observers('profile_created', profile_id)
+            logger.info(f"Profile created successfully: {profile_id} - {name}")
             return profile_id
+            
         except Exception as e:
             logger.error(f"Error creating profile: {e}")
             return None
     
-    def update_profile(self, profile_id: int, **kwargs) -> bool:
-        """Updates a profile"""
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+    def update_profile(self, profile_id: int, name: str = None, description: str = None, 
+                      feed_rate: float = None, material_size: str = None,
+                      product_size: str = None, pdf_data: bytes = None,
+                      pdf_filename: str = None) -> bool:
+        """Updates a profile with PDF support"""
+        # ПРОВЕРКА ДОСТУПА
         self._raise_if_read_only()
         
-        success = self.db.update_profile(profile_id, **kwargs)
-        if success:
-            self.notify_observers('profile_updated', profile_id)
-        return success
+        try:
+            # Получаем текущий профиль
+            current_profile = self.get_profile(profile_id)
+            if not current_profile:
+                logger.error(f"Profile not found: {profile_id}")
+                return False
+            
+            # Подготавливаем данные для обновления
+            update_data = {}
+            if name is not None:
+                update_data['name'] = name
+            if description is not None:
+                update_data['description'] = description
+            if feed_rate is not None:
+                update_data['feed_rate'] = feed_rate
+            if material_size is not None:
+                update_data['material_size'] = material_size
+            if product_size is not None:
+                update_data['product_size'] = product_size
+            
+            # Обработка PDF
+            new_preview = current_profile.image_data
+            new_pdf_path = current_profile.pdf_path
+            
+            if pdf_data is not None:
+                # Удаляем старый PDF если он был
+                if current_profile.pdf_path:
+                    self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
+                
+                # Сохраняем новый PDF
+                success, pdf_path = self.pdf_manager.save_profile_pdf(
+                    profile_id, pdf_data, pdf_filename
+                )
+                
+                if not success:
+                    logger.error(f"Failed to save new PDF for profile {profile_id}")
+                    return False
+                
+                new_pdf_path = pdf_path
+                
+                # Извлекаем превью из нового PDF
+                new_preview = self.pdf_manager.extract_pdf_preview(pdf_data)
+            
+            # Добавляем данные изображения и PDF в обновление
+            if pdf_data is not None:
+                update_data['image_data'] = new_preview
+                update_data['pdf_path'] = new_pdf_path
+            
+            # Если передали None для pdf_data, значит удаляем PDF
+            elif pdf_data is None and pdf_filename is None:
+                # Это сигнал, что нужно удалить PDF
+                if current_profile.pdf_path:
+                    self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
+                    update_data['image_data'] = None
+                    update_data['pdf_path'] = None
+            
+            # Выполняем обновление в базе данных
+            success = self.db.update_profile(profile_id, **update_data)
+            
+            if success:
+                self.notify_observers('profile_updated', profile_id)
+                logger.info(f"Profile updated successfully: {profile_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error updating profile {profile_id}: {e}")
+            return False
     
     def delete_profile(self, profile_id: int) -> bool:
-        """Deletes a profile"""
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        """Deletes a profile and its associated PDF file"""
+        # ПРОВЕРКА ДОСТУПА
         self._raise_if_read_only()
         
-        success = self.db.delete_profile(profile_id)
-        if success:
-            self.notify_observers('profile_deleted', profile_id)
+        try:
+            # Получаем профиль чтобы знать путь к PDF
+            profile = self.get_profile(profile_id)
+            
+            # Удаляем профиль из базы данных
+            success = self.db.delete_profile(profile_id)
+            
+            if not success:
+                logger.error(f"Failed to delete profile from database: {profile_id}")
+                return False
+            
+            # Удаляем связанный PDF файл если он существует
+            if profile and profile.pdf_path:
+                pdf_deleted = self.pdf_manager.delete_profile_pdf(profile_id, profile.pdf_path)
+                if pdf_deleted:
+                    logger.info(f"PDF file deleted for profile {profile_id}")
+                else:
+                    logger.warning(f"PDF file not found for profile {profile_id}")
+            
+            # Обновляем текущий профиль если нужно
             if self.current_profile_id == profile_id:
                 self.current_profile_id = None
-        return success
+            
+            # Уведомляем наблюдателей
+            self.notify_observers('profile_deleted', profile_id)
+            logger.info(f"Profile deleted successfully: {profile_id}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting profile {profile_id}: {e}")
+            return False
+    
+    # === НОВЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С PDF ===
+    
+    def get_profile_pdf(self, profile_id: int) -> Optional[bytes]:
+        """Gets PDF file data for a profile"""
+        try:
+            profile = self.get_profile(profile_id)
+            if not profile or not profile.pdf_path:
+                return None
+            
+            return self.pdf_manager.load_profile_pdf(profile_id, profile.pdf_path)
+            
+        except Exception as e:
+            logger.error(f"Error getting PDF for profile {profile_id}: {e}")
+            return None
+    
+    def open_profile_pdf(self, profile_id: int) -> bool:
+        """Opens profile PDF in external viewer"""
+        try:
+            profile = self.get_profile(profile_id)
+            if not profile or not profile.pdf_path:
+                logger.warning(f"No PDF found for profile {profile_id}")
+                return False
+            
+            return self.pdf_manager.open_pdf_external(profile.pdf_path)
+            
+        except Exception as e:
+            logger.error(f"Error opening PDF for profile {profile_id}: {e}")
+            return False
+    
+    def get_pdf_info(self, profile_id: int) -> Dict[str, Any]:
+        """Gets information about profile's PDF file"""
+        try:
+            profile = self.get_profile(profile_id)
+            if not profile:
+                return {'has_pdf': False, 'error': 'Profile not found'}
+            
+            return self.pdf_manager.get_profile_pdf_info(profile_id)
+            
+        except Exception as e:
+            logger.error(f"Error getting PDF info for profile {profile_id}: {e}")
+            return {'has_pdf': False, 'error': str(e)}
+    
+    def has_pdf_document(self, profile_id: int) -> bool:
+        """Checks if profile has a PDF document"""
+        try:
+            profile = self.get_profile(profile_id)
+            return profile is not None and profile.has_pdf
+            
+        except Exception as e:
+            logger.error(f"Error checking PDF for profile {profile_id}: {e}")
+            return False
+    
+    # === МЕТОД ДЛЯ МИГРАЦИИ СТАРЫХ ДАННЫХ (опционально) ===
+    
+    def migrate_profile_to_pdf(self, profile_id: int, pdf_data: bytes, 
+                              pdf_filename: str = None) -> bool:
+        """Migrates existing profile to use PDF (for old profiles with images)"""
+        try:
+            profile = self.get_profile(profile_id)
+            if not profile:
+                logger.error(f"Cannot migrate: Profile {profile_id} not found")
+                return False
+            
+            # Удаляем старое изображение если есть
+            if profile.pdf_path:
+                logger.warning(f"Profile {profile_id} already has PDF")
+                return False
+            
+            # Сохраняем новый PDF
+            success, pdf_path = self.pdf_manager.save_profile_pdf(
+                profile_id, pdf_data, pdf_filename
+            )
+            
+            if not success:
+                logger.error(f"Failed to save PDF for migration: {profile_id}")
+                return False
+            
+            # Извлекаем превью
+            preview = self.pdf_manager.extract_pdf_preview(pdf_data)
+            
+            # Обновляем профиль
+            update_success = self.db.update_profile(
+                profile_id=profile_id,
+                image_data=preview,
+                pdf_path=pdf_path
+            )
+            
+            if update_success:
+                logger.info(f"Profile migrated to PDF: {profile_id}")
+                self.notify_observers('profile_updated', profile_id)
+            
+            return update_success
+            
+        except Exception as e:
+            logger.error(f"Error migrating profile {profile_id} to PDF: {e}")
+            return False
 
 
 # Make sure this export is at the end of the file

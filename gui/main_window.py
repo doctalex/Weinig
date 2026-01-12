@@ -41,8 +41,12 @@ class WeinigHydromatManager:
         self.profile_service = ProfileService(self.db)
         self.tool_service = ToolService(self.db)
         
-        # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРА БЕЗОПАСНОСТИ (НОВОЕ)
-        self.security = SecurityManager()
+        # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
+        from config.security import get_security_manager
+        self.security = get_security_manager()
+    
+        # Подписываемся на изменения режима безопасности
+        self.security.add_callback(self.on_security_mode_change)
         
         # Настройка горячих клавиш (НОВОЕ)
         self._setup_hotkeys()
@@ -646,7 +650,7 @@ class WeinigHydromatManager:
             show_info(self.root, "Info", "No document available for this profile")
     
     def _show_preview_large(self, profile: Profile):
-        """Показывает увеличенное превью профиля"""
+        """Показывает увеличенное превью профиля в полноэкранном режиме с зумом и перемещением"""
         try:
             from PIL import Image, ImageTk
             import io
@@ -654,43 +658,279 @@ class WeinigHydromatManager:
             # Create a new window
             preview_window = tk.Toplevel(self.root)
             preview_window.title(f"Profile Preview - {profile.name}")
+            
+            # ПОЛНОЭКРАННЫЙ РЕЖИМ БЕЗ КНОПОК
+            preview_window.attributes('-fullscreen', True)
+            preview_window.configure(bg='black')
+            
+            # Load the image
+            img_data = profile.get_preview()
+            if not img_data:
+                show_error(preview_window, "Error", "No preview image available")
+                preview_window.destroy()
+                return
+                
+            img = Image.open(io.BytesIO(img_data))
+            original_width, original_height = img.size
+            
+            # Сохраняем состояние для перемещения и зума
+            preview_window.original_image = img
+            preview_window.current_zoom = 1.0
+            preview_window.min_zoom = 0.5
+            preview_window.max_zoom = 5.0
+            preview_window.image_x = 0
+            preview_window.image_y = 0
+            preview_window.is_dragging = False
+            preview_window.drag_start_x = 0
+            preview_window.drag_start_y = 0
+            
+            # Рассчитываем начальный размер
+            screen_width = preview_window.winfo_screenwidth()
+            screen_height = preview_window.winfo_screenheight()
+            
+            scale_width = screen_width / original_width
+            scale_height = screen_height / original_height
+            scale = min(scale_width, scale_height) * 0.9
+            
+            new_width = int(original_width * scale)
+            new_height = int(original_height * scale)
+            
+            # Начальная позиция - по центру
+            x_center = (screen_width - new_width) // 2
+            y_center = (screen_height - new_height) // 2
+            preview_window.image_x = x_center
+            preview_window.image_y = y_center
+            
+            # Создаем Canvas с черным фоном
+            canvas = tk.Canvas(preview_window, bg='black', highlightthickness=0)
+            canvas.pack(expand=True, fill=tk.BOTH)
+            
+            # Преобразуем изображение для Tkinter
+            resized_img = img.resize((new_width, new_height), RESAMPLE)
+            photo = ImageTk.PhotoImage(resized_img)
+            
+            # Создаем изображение на Canvas
+            image_id = canvas.create_image(
+                preview_window.image_x, 
+                preview_window.image_y, 
+                anchor="nw", 
+                image=photo
+            )
+            
+            # Сохраняем ссылки
+            canvas.photo = photo
+            canvas.image_id = image_id
+            preview_window.canvas = canvas
+            preview_window.display_width = new_width
+            preview_window.display_height = new_height
+            preview_window.base_scale = scale
+            preview_window.current_photo = photo
+            
+            # Функция для обновления изображения при зуме
+            def update_image():
+                """Обновляет изображение с текущим зумом и позицией"""
+                try:
+                    # Вычисляем новые размеры
+                    zoomed_width = int(original_width * preview_window.base_scale * preview_window.current_zoom)
+                    zoomed_height = int(original_height * preview_window.base_scale * preview_window.current_zoom)
+                    
+                    # Ресайзим изображение
+                    zoomed_img = preview_window.original_image.resize(
+                        (zoomed_width, zoomed_height), 
+                        RESAMPLE
+                    )
+                    
+                    # Преобразуем в PhotoImage
+                    new_photo = ImageTk.PhotoImage(zoomed_img)
+                    
+                    # Обновляем изображение на Canvas
+                    canvas.itemconfig(image_id, image=new_photo)
+                    canvas.photo = new_photo
+                    preview_window.current_photo = new_photo
+                    
+                    # Устанавливаем новую позицию
+                    canvas.coords(image_id, preview_window.image_x, preview_window.image_y)
+                    
+                    # Обновляем информацию о зуме
+                    if hasattr(preview_window, 'zoom_label'):
+                        preview_window.zoom_label.config(
+                            text=f"Zoom: {preview_window.current_zoom:.1f}x • Drag to move"
+                        )
+                    
+                except Exception as e:
+                    logger.error(f"Error updating image: {e}")
+            
+            # Зум колесиком мыши с центрированием на курсоре
+            def on_mouse_wheel(event):
+                try:
+                    # Получаем координаты курсора
+                    mouse_x = event.x
+                    mouse_y = event.y
+                    
+                    # Вычисляем положение курсора относительно изображения
+                    img_rel_x = mouse_x - preview_window.image_x
+                    img_rel_y = mouse_y - preview_window.image_y
+                    
+                    # Вычисляем процентное положение курсора на изображении
+                    if preview_window.display_width * preview_window.current_zoom > 0:
+                        percent_x = img_rel_x / (preview_window.display_width * preview_window.current_zoom)
+                        percent_y = img_rel_y / (preview_window.display_height * preview_window.current_zoom)
+                    else:
+                        percent_x = percent_y = 0.5
+                    
+                    # Определяем направление зума
+                    zoom_factor = 1.2 if event.delta > 0 else 0.8
+                    new_zoom = preview_window.current_zoom * zoom_factor
+                    
+                    # Ограничиваем зум
+                    new_zoom = max(preview_window.min_zoom, 
+                                  min(preview_window.max_zoom, new_zoom))
+                    
+                    if abs(new_zoom - preview_window.current_zoom) < 0.01:
+                        return
+                    
+                    # Сохраняем старые размеры
+                    old_width = preview_window.display_width * preview_window.current_zoom
+                    old_height = preview_window.display_height * preview_window.current_zoom
+                    
+                    # Обновляем зум
+                    preview_window.current_zoom = new_zoom
+                    
+                    # Вычисляем новые размеры
+                    new_width = preview_window.display_width * new_zoom
+                    new_height = preview_window.display_height * new_zoom
+                    
+                    # Вычисляем новую позицию для сохранения позиции курсора
+                    new_img_rel_x = percent_x * new_width
+                    new_img_rel_y = percent_y * new_height
+                    
+                    # Обновляем позицию изображения
+                    preview_window.image_x = mouse_x - new_img_rel_x
+                    preview_window.image_y = mouse_y - new_img_rel_y
+                    
+                    # Обновляем изображение
+                    update_image()
+                    
+                except Exception as e:
+                    logger.error(f"Error zooming image: {e}")
+            
+            # Перемещение изображения мышью (зажатая левая кнопка)
+            def start_drag(event):
+                preview_window.is_dragging = True
+                preview_window.drag_start_x = event.x
+                preview_window.drag_start_y = event.y
+                canvas.config(cursor="fleur")
+            
+            def do_drag(event):
+                if preview_window.is_dragging:
+                    # Вычисляем смещение
+                    dx = event.x - preview_window.drag_start_x
+                    dy = event.y - preview_window.drag_start_y
+                    
+                    # Обновляем стартовые координаты
+                    preview_window.drag_start_x = event.x
+                    preview_window.drag_start_y = event.y
+                    
+                    # Обновляем позицию изображения
+                    preview_window.image_x += dx
+                    preview_window.image_y += dy
+                    
+                    # Обновляем положение на Canvas
+                    canvas.coords(image_id, preview_window.image_x, preview_window.image_y)
+            
+            def stop_drag(event):
+                preview_window.is_dragging = False
+                canvas.config(cursor="")
+            
+            # Сброс позиции и зума
+            def reset_view(event=None):
+                preview_window.current_zoom = 1.0
+                preview_window.image_x = (screen_width - preview_window.display_width) // 2
+                preview_window.image_y = (screen_height - preview_window.display_height) // 2
+                update_image()
+            
+            # Привязка событий мыши
+            canvas.bind("<MouseWheel>", on_mouse_wheel)
+            canvas.bind("<ButtonPress-1>", start_drag)
+            canvas.bind("<B1-Motion>", do_drag)
+            canvas.bind("<ButtonRelease-1>", stop_drag)
+            canvas.bind("<Double-Button-1>", lambda e: preview_window.destroy())
+            
+            # Информационная панель
+            info_frame = tk.Frame(preview_window, bg='black')
+            info_frame.place(x=10, y=10)
+            
+            # Размер изображения
+            size_label = tk.Label(
+                info_frame,
+                text=f"Original: {original_width}×{original_height}",
+                font=("Arial", 10),
+                bg='black',
+                fg='gray',
+                padx=5,
+                pady=2
+            )
+            size_label.pack(anchor='w')
+            
+            # Имя профиля
+            name_label = tk.Label(
+                info_frame,
+                text=f"Profile: {profile.name}",
+                font=("Arial", 10),
+                bg='black',
+                fg='gray',
+                padx=5,
+                pady=2
+            )
+            name_label.pack(anchor='w')
+            
+            # Информация о зуме
+            zoom_label = tk.Label(
+                info_frame,
+                text=f"Zoom: 1.0x • Drag to move",
+                font=("Arial", 10, "bold"),
+                bg='black',
+                fg='lightblue',
+                padx=5,
+                pady=2
+            )
+            zoom_label.pack(anchor='w')
+            preview_window.zoom_label = zoom_label
+            
+            # Подсказка
+            hint_label = tk.Label(
+                preview_window,
+                text="ESC: Close • Wheel: Zoom • Drag: Move • R: Reset • Double-click: Close",
+                font=("Arial", 10),
+                bg='black',
+                fg='white',
+                pady=5
+            )
+            hint_label.place(relx=0.5, rely=0.98, anchor="center")
+            
+            # Автоматически скрываем подсказку
+            preview_window.after(4000, hint_label.destroy)
+            
+            # Горячие клавиши
+            preview_window.bind('<Escape>', lambda e: preview_window.destroy())
+            preview_window.bind('<F11>', lambda e: self._toggle_fullscreen_simple(preview_window))
+            preview_window.bind('r', lambda e: reset_view())
+            preview_window.bind('R', lambda e: reset_view())
+            preview_window.bind('0', lambda e: reset_view())
 
-            # Load and resize the image
-            img = Image.open(io.BytesIO(profile.get_preview()))
-
-            # Limit the maximum display size
-            max_size = (800, 600)
-            img.thumbnail(max_size, RESAMPLE)
-
-            # Convert to Tkinter format
-            photo = ImageTk.PhotoImage(img)
-
-            # Create and pack the image label
-            img_label = ttk.Label(preview_window, image=photo)
-            img_label.image = photo  # Keep a reference
-            img_label.pack(padx=10, pady=10)
-
-            # Add a close button
-            close_btn = ttk.Button(preview_window, text="Close", command=preview_window.destroy)
-            close_btn.pack(pady=(0, 10))
-
-            # Center the window on screen
-            preview_window.update_idletasks()
-            width = img.width + 40
-            height = img.height + 70
-            x = (preview_window.winfo_screenwidth() - width) // 2
-            y = (preview_window.winfo_screenheight() - height) // 2
-            preview_window.geometry(f"{width}x{height}+{x}+{y}")
-
-            # Make the window modal
+            # Make window modal
             preview_window.transient(self.root)
             preview_window.grab_set()
+            preview_window.focus_set()
 
-        except ImportError:
-            show_error(self.root, "Error", "Pillow library is required to display images")
         except Exception as e:
             logger.error(f"Error displaying profile preview: {e}")
             show_error(self.root, "Error", f"Could not display preview: {e}")
+            
+    def _toggle_fullscreen_simple(self, window):
+        """Простое переключение полноэкранного режима"""
+        current_state = window.attributes('-fullscreen')
+        window.attributes('-fullscreen', not current_state)
 
     def _setup_heads_table(self, parent):
         """Настройка таблицы голов"""
@@ -1210,10 +1450,13 @@ class WeinigHydromatManager:
             show_error(self.root, "Error", f"Failed to save job configuration: {str(e)}")
     
     # НОВЫЙ МЕТОД ДЛЯ ОБНОВЛЕНИЯ ИНТЕРФЕЙСА ПРИ СМЕНЕ РЕЖИМА
-    def on_security_mode_change(self):
+    def on_security_mode_change(self, is_read_only=None):
         """Вызывается при изменении режима безопасности"""
+        # Параметр is_read_only может передаваться или нет
         self.update_ui_for_security_mode()
-        logger.info(f"Security mode changed to: {'READ ONLY' if self.security.is_read_only() else 'FULL ACCESS'}")
+        
+        mode_text = "READ ONLY" if self.security.is_read_only() else "FULL ACCESS"
+        logger.info(f"Security mode changed to: {mode_text}")
     
     def update_ui_for_security_mode(self):
         """Обновляет интерфейс в зависимости от текущего режима безопасности"""

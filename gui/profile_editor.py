@@ -24,7 +24,7 @@ class ProfileEditor:
     
     def __init__(self, parent, profile_service: ProfileService, 
                 profile: Optional[Profile] = None, callback=None):
-        print("ProfileEditor initialized")  # Debug print
+        print("ProfileEditor initialized")
         self.parent = parent
         self.profile_service = profile_service
         self.profile = profile
@@ -35,6 +35,16 @@ class ProfileEditor:
         self.pdf_filename = None
         
         self.is_editing = profile is not None
+        
+        # Получаем глобальный SecurityManager
+        try:
+            from config.security import get_security_manager, is_read_only
+            self.security_manager = get_security_manager()
+            self.security_manager.add_callback(self._on_security_mode_changed)
+            print(f"DEBUG: SecurityManager initialized, read_only: {is_read_only()}")
+        except Exception as e:
+            print(f"DEBUG: SecurityManager error: {e}")
+            self.security_manager = None
         
         self.setup_ui()
     
@@ -65,6 +75,9 @@ class ProfileEditor:
         canvas = tk.Canvas(scrollable_frame_container)
         scrollbar = ttk.Scrollbar(scrollable_frame_container, orient="vertical", command=canvas.yview)
         
+        # Сохраняем ссылку на canvas в self
+        self.canvas = canvas
+        
         # Фрейм внутри Canvas для размещения виджетов
         scrollable_content = ttk.Frame(canvas)
         
@@ -92,11 +105,18 @@ class ProfileEditor:
         # Упаковка Canvas
         canvas.pack(side="left", fill="both", expand=True)
         
-        # Привязка колеса мыши
+        # Привязка колеса мыши - ИСПРАВЛЕННАЯ ВЕРСИЯ
         def _on_mouse_wheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                # Используем self.canvas вместо локальной переменной
+                if hasattr(self, 'canvas') and self.canvas.winfo_exists():
+                    self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except (tk.TclError, AttributeError):
+                # Игнорируем ошибки, возникающие при уничтожении окна
+                pass
         
-        self._mouse_wheel_binding = canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
+        # Привязываем с использованием self.canvas
+        self._mouse_wheel_binding = self.canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
         
         # Настройка формы внутри скроллируемого контента
         self._setup_form(scrollable_content)
@@ -132,14 +152,36 @@ class ProfileEditor:
     def _on_close(self):
         """Обработчик закрытия окна"""
         try:
-            # Удаляем привязку колеса мыши
-            if hasattr(self, '_mouse_wheel_binding'):
-                self.window.unbind_all("<MouseWheel>")
+            # Отписываемся от SecurityManager
+            if hasattr(self, 'security_manager') and self.security_manager:
+                try:
+                    self.security_manager.remove_callback(self._on_security_mode_changed)
+                    print("DEBUG: Unsubscribed from security changes")
+                except Exception as e:
+                    print(f"DEBUG: Error unsubscribing from security: {e}")
+            
+            # Удаляем привязку колеса мыши - ВАЖНО: ДО уничтожения окна!
+            try:
+                if hasattr(self, '_mouse_wheel_binding'):
+                    # Очищаем все привязки MouseWheel
+                    self.window.unbind_all("<MouseWheel>")
+                    # Также отключаем конкретную привязку если она была сохранена
+                    if hasattr(self, 'canvas'):
+                        try:
+                            self.canvas.unbind_all("<MouseWheel>")
+                        except:
+                            pass
+            except Exception as e:
+                print(f"DEBUG: Error removing mouse wheel binding: {e}")
+                
         except Exception as e:
             logger.warning(f"Ошибка при закрытии окна: {e}")
         
         # Закрываем окно
-        self.window.destroy()
+        try:
+            self.window.destroy()
+        except:
+            pass
 
     def _setup_form(self, parent):
         """Настройка формы ввода с управлением состоянием READ ONLY"""
@@ -605,15 +647,17 @@ class ProfileEditor:
     
     def _apply_access_mode(self):
         """Применяет режим доступа (READ ONLY или FULL ACCESS) к виджетам"""
-        # Проверяем текущий режим безопасности из приложения
+        # Всегда проверяем актуальное состояние
         try:
-            from config.security import get_security_mode
-            security_mode = get_security_mode()
-        except ImportError:
-            security_mode = "full_access"  # По умолчанию
+            from config.security import is_read_only
+            current_read_only = is_read_only()
+            print(f"DEBUG: Current security mode: {'read_only' if current_read_only else 'full_access'}")
+        except Exception as e:
+            print(f"DEBUG: Error getting security mode: {e}")
+            current_read_only = False  # По умолчанию FULL ACCESS
         
         # Определяем режим доступа
-        if security_mode == "read_only":
+        if current_read_only:
             access_mode = "READ_ONLY"
         else:
             access_mode = "FULL_ACCESS"
@@ -622,7 +666,7 @@ class ProfileEditor:
         if self.profile and hasattr(self.profile, 'locked') and self.profile.locked:
             access_mode = "READ_ONLY"
         
-        print(f"DEBUG: Applying access mode: {access_mode}")  # Debug print
+        print(f"DEBUG: Applying access mode: {access_mode}")
         
         # Применяем режим
         if access_mode == "READ_ONLY":
@@ -631,12 +675,15 @@ class ProfileEditor:
             readonly_text = " (READ ONLY)"
             
             # Обновляем заголовок окна
-            current_title = self.window.title()
-            if "(READ ONLY)" not in current_title:
-                self.window.title(f"{current_title} {readonly_text}")
+            if hasattr(self, 'window') and self.window.winfo_exists():
+                current_title = self.window.title()
+                if "(READ ONLY)" not in current_title:
+                    self.window.title(f"{current_title} {readonly_text}")
         else:
             state = "normal"
             bg_color = "white"
+    
+    # ... остальная часть метода без изменений ...
         
         # Применяем состояние ко всем редактируемым виджетам
         widgets = [
@@ -686,45 +733,35 @@ class ProfileEditor:
     
     def _check_security(self, action: str) -> bool:
         """
-        Проверка прав доступа (заглушка для обратной совместимости)
-        
-        Args:
-            action: Действие для проверки ('create_profile', 'edit_profile', 'delete_profile', etc.)
-        
-        Returns:
-            bool: True если разрешено, False если запрещено
+        Проверка прав доступа с динамической проверкой режима
         """
-        # Сначала проверяем текущий режим доступа
-        if hasattr(self, 'access_mode') and self.access_mode == "READ_ONLY":
-            logger.warning(f"Action denied in READ ONLY mode: {action}")
-            return False
+        # ВСЕГДА проверяем актуальный режим
+        try:
+            from config.security import is_read_only
+            if is_read_only():
+                logger.warning(f"Action denied in READ ONLY mode: {action}")
+                
+                # Показываем информативное сообщение
+                messagebox.showwarning(
+                    "Read Only Mode",
+                    f"Action '{action}' is not available in Read Only mode.\n\n"
+                    f"Please switch to Full Access mode:\n"
+                    f"1. Press Ctrl+Shift+F in main window\n"
+                    f"2. Then retry this operation"
+                )
+                return False
+        except Exception as e:
+            print(f"DEBUG: Error checking security: {e}")
+            # В случае ошибки разрешаем операцию
         
-        # TODO: Реализовать через SecurityManager когда будет готов
-        # Пример:
-        # try:
-        #     from config.security import SecurityManager
-        #     security_manager = SecurityManager()
-        #     if hasattr(self, 'current_user'):
-        #         if not security_manager.check_permission(action, self.current_user):
-        #             # Логирование попытки несанкционированного доступа
-        #             self._log_security_action(f'permission_denied_{action}',
-        #                                      f'Попытка выполнения действия: {action}',
-        #                                      severity='MEDIUM')
-        #             
-        #             # Показать предупреждение
-        #             required_role = security_manager.get_required_role(action)
-        #             messagebox.showwarning(
-        #                 "Доступ запрещен",
-        #                 f"У вас нет прав для выполнения действия: {action}\n"
-        #                 f"Требуемая роль: {required_role}"
-        #             )
-        #             return False
-        #         return True
-        # except ImportError:
-        #     pass
-        
-        # По умолчанию разрешаем все для обратной совместимости
         return True
+    
+    def _on_security_mode_changed(self, is_read_only: bool):
+        """Callback при изменении режима безопасности"""
+        print(f"DEBUG: Security mode changed to: {'READ_ONLY' if is_read_only else 'FULL_ACCESS'}")
+        # Обновляем UI с небольшой задержкой
+        if hasattr(self, 'window') and self.window.winfo_exists():
+            self.window.after(100, self._apply_access_mode)
     
     def _confirm_critical_operation(self, title: str, message: str) -> bool:
         """

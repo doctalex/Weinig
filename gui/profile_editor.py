@@ -39,13 +39,13 @@ class ProfileEditor:
         self.setup_ui()
     
     def setup_ui(self):
-        """Настройка интерфейса"""
+        """Настройка интерфейса с фиксированными кнопками управления"""
         # Создание окна
         self.window = tk.Toplevel(self.parent)
         title = "Edit Profile" if self.is_editing else "Add Profile"
         self.window.title(title)
-        self.window.geometry("500x700")  # Увеличиваем высоту окна
-        self.window.minsize(500, 700)   # Минимальный размер
+        self.window.geometry("650x750")  # Увеличиваем размеры
+        self.window.minsize(600, 700)
         self.window.resizable(True, True)
         
         # Делаем модальным
@@ -53,73 +53,60 @@ class ProfileEditor:
         self.window.grab_set()
         self.window.focus_set()
         
-        # Основной фрейм
-        main_frame = ttk.Frame(self.window, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Создаем фрейм с возможностью прокрутки только при необходимости
-        container = ttk.Frame(main_frame)
-        container.pack(fill=tk.BOTH, expand=True)
-        
-        # Canvas для прокрутки
-        canvas = tk.Canvas(container)
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        # Привязываем конфигурацию скроллбара
-        def _on_frame_configure(event):
-            # Обновляем область прокрутки при изменении содержимого
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Отключаем скроллбар, если содержимое помещается на экране
-            if scrollable_frame.winfo_reqheight() <= canvas.winfo_height():
-                scrollbar.pack_forget()
-                canvas.configure(yscrollcommand=None)
-            else:
-                scrollbar.pack(side="right", fill="y")
-                canvas.configure(yscrollcommand=scrollbar.set)
-        
-        scrollable_frame.bind("<Configure>", _on_frame_configure)
-        
-        # Привязываем колесо мыши для прокрутки
-        def _on_mouse_wheel(event):
-            try:
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except tk.TclError:
-                # Игнорируем ошибки, возникающие при уничтожении окна
-                pass
-        
-        # Сохраняем ID привязки для последующего удаления
-        self._mouse_wheel_binding = canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
-        
-        # Создаем окно с содержимым
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        
-        # Упаковываем canvas и скроллбар
-        canvas.pack(side="left", fill="both", expand=True)
-        
-        # Обновляем геометрию после загрузки всех виджетов
-        def _update_scroll_region():
-            canvas.update_idletasks()
-            _on_frame_configure(None)
-        
-        self.window.after(100, _update_scroll_region)
-        
-        # Основной контейнер с отступами
-        main_container = scrollable_frame
+        # Основная структура: 1) Скроллируемая форма, 2) Фиксированные кнопки
+        main_container = ttk.Frame(self.window)
         main_container.pack(fill=tk.BOTH, expand=True)
         
-        # Фрейм для формы
-        form_frame = ttk.Frame(main_container)
-        form_frame.pack(fill=tk.BOTH, expand=True)
+        # Фрейм для скроллируемого контента (занимает всё пространство кроме кнопок)
+        scrollable_frame_container = ttk.Frame(main_container)
+        scrollable_frame_container.pack(fill=tk.BOTH, expand=True)
         
-        # Форма ввода
-        self._setup_form(form_frame)
+        # Canvas для прокрутки
+        canvas = tk.Canvas(scrollable_frame_container)
+        scrollbar = ttk.Scrollbar(scrollable_frame_container, orient="vertical", command=canvas.yview)
         
-        # Фрейм для кнопок внизу
-        button_frame = ttk.Frame(main_container)
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
+        # Фрейм внутри Canvas для размещения виджетов
+        scrollable_content = ttk.Frame(canvas)
         
-        # Кнопки
+        # Настройка прокрутки
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Показываем скроллбар только при необходимости
+            if scrollable_content.winfo_reqheight() > canvas.winfo_height():
+                scrollbar.pack(side="right", fill="y")
+                canvas.configure(yscrollcommand=scrollbar.set)
+            else:
+                scrollbar.pack_forget()
+                canvas.configure(yscrollcommand=None)
+        
+        scrollable_content.bind("<Configure>", _on_frame_configure)
+        
+        # Создаем окно в Canvas
+        canvas.create_window((0, 0), window=scrollable_content, anchor="nw", width=canvas.winfo_width())
+        
+        def _configure_canvas(event):
+            canvas.itemconfig(1, width=event.width)  # Обновляем ширину окна в Canvas
+        
+        canvas.bind('<Configure>', _configure_canvas)
+        
+        # Упаковка Canvas
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # Привязка колеса мыши
+        def _on_mouse_wheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        self._mouse_wheel_binding = canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
+        
+        # Настройка формы внутри скроллируемого контента
+        self._setup_form(scrollable_content)
+        
+        # Фрейм для кнопок управления (ВСЕГДА ВИДИМЫЙ)
+        button_frame = ttk.Frame(main_container, height=70)  # Фиксированная высота
+        button_frame.pack_propagate(False)  # Не менять высоту
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(10, 10))
+        
+        # Настройка кнопок
         self._setup_buttons(button_frame)
         
         # Загружаем данные профиля если редактируем
@@ -135,6 +122,12 @@ class ProfileEditor:
         
         # Обработчик закрытия окна
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Обновляем прокрутку после загрузки
+        self.window.after(100, lambda: _on_frame_configure(None))
+        
+        # Сразу применяем режим доступа после создания всех виджетов
+        self.window.after(150, self._apply_access_mode)
 
     def _on_close(self):
         """Обработчик закрытия окна"""
@@ -149,17 +142,17 @@ class ProfileEditor:
         self.window.destroy()
 
     def _setup_form(self, parent):
-        """Настройка формы ввода"""
+        """Настройка формы ввода с управлением состоянием READ ONLY"""
         # Имя профиля
         name_frame = ttk.Frame(parent)
         name_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(name_frame, text="Profile Name:*", 
-                font=("Arial", 10, "bold")).pack(anchor=tk.W)
+                  font=("Arial", 10, "bold")).pack(anchor=tk.W)
         self.name_var = tk.StringVar()
-        name_entry = ttk.Entry(name_frame, textvariable=self.name_var, 
-                            font=("Arial", 11))
-        name_entry.pack(fill=tk.X, pady=(5, 0))
+        self.name_entry = ttk.Entry(name_frame, textvariable=self.name_var, 
+                                  font=("Arial", 11))
+        self.name_entry.pack(fill=tk.X, pady=(5, 0))
         
         # Описание
         desc_frame = ttk.LabelFrame(parent, text="Description", padding="10")
@@ -178,8 +171,8 @@ class ProfileEditor:
         
         ttk.Label(feed_frame, text="Feed Rate:", width=12).pack(side=tk.LEFT)
         self.feed_var = tk.StringVar(value="30")
-        feed_entry = ttk.Entry(feed_frame, textvariable=self.feed_var, width=10)
-        feed_entry.pack(side=tk.LEFT, padx=(5, 0))
+        self.feed_entry = ttk.Entry(feed_frame, textvariable=self.feed_var, width=10)
+        self.feed_entry.pack(side=tk.LEFT, padx=(5, 0))
         ttk.Label(feed_frame, text="m/min").pack(side=tk.LEFT, padx=(5, 0))
         
         # Размеры
@@ -188,13 +181,13 @@ class ProfileEditor:
         
         ttk.Label(size_frame, text="Material Size:", width=12).pack(side=tk.LEFT)
         self.material_var = tk.StringVar(value="")
-        material_entry = ttk.Entry(size_frame, textvariable=self.material_var, width=15)
-        material_entry.pack(side=tk.LEFT, padx=(5, 0))
+        self.material_entry = ttk.Entry(size_frame, textvariable=self.material_var, width=15)
+        self.material_entry.pack(side=tk.LEFT, padx=(5, 0))
         
         ttk.Label(size_frame, text="Product Size:", width=12).pack(side=tk.LEFT, padx=(10, 0))
         self.product_var = tk.StringVar(value="")
-        product_entry = ttk.Entry(size_frame, textvariable=self.product_var, width=15)
-        product_entry.pack(side=tk.LEFT, padx=(5, 0))
+        self.product_entry = ttk.Entry(size_frame, textvariable=self.product_var, width=15)
+        self.product_entry.pack(side=tk.LEFT, padx=(5, 0))
         
         # PDF документ вместо изображения
         pdf_frame = ttk.LabelFrame(parent, text="Profile Document (PDF)", padding="10")
@@ -204,10 +197,13 @@ class ProfileEditor:
         pdf_btn_frame = ttk.Frame(pdf_frame)
         pdf_btn_frame.pack(fill=tk.X, pady=(0, 5))
         
-        ttk.Button(pdf_btn_frame, text="Upload PDF Document", 
-                command=self.upload_pdf).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(pdf_btn_frame, text="Remove PDF", 
-                command=self.remove_pdf).pack(side=tk.LEFT)
+        self.upload_btn = ttk.Button(pdf_btn_frame, text="Upload PDF Document", 
+                                    command=self.upload_pdf)
+        self.upload_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.remove_btn = ttk.Button(pdf_btn_frame, text="Remove PDF", 
+                                    command=self.remove_pdf)
+        self.remove_btn.pack(side=tk.LEFT)
         
         # Статус PDF
         self.pdf_status_label = ttk.Label(
@@ -223,7 +219,7 @@ class ProfileEditor:
         preview_container.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
         
         preview_inner = ttk.Frame(preview_container, width=200, height=150)
-        preview_inner.pack_propagate(False)  # Prevent container from resizing
+        preview_inner.pack_propagate(False)
         preview_inner.pack(pady=5)
         
         # Image preview для показа первой страницы PDF
@@ -251,31 +247,31 @@ class ProfileEditor:
         
         # Кнопка удаления (только при редактировании)
         if self.is_editing:
-            delete_btn = ttk.Button(
+            self.delete_btn = ttk.Button(
                 button_frame, 
                 text="Delete", 
                 command=self.delete,
                 width=15
             )
-            delete_btn.pack(side=tk.LEFT, padx=5)
+            self.delete_btn.pack(side=tk.LEFT, padx=5)
         
         # Кнопка отмены
-        cancel_btn = ttk.Button(
+        self.cancel_btn = ttk.Button(
             button_frame, 
             text="Cancel", 
             command=self.window.destroy,
             width=15
         )
-        cancel_btn.pack(side=tk.LEFT, padx=5)
+        self.cancel_btn.pack(side=tk.LEFT, padx=5)
         
         # Кнопка сохранения
-        save_btn = ttk.Button(
+        self.save_btn = ttk.Button(
             button_frame, 
             text="Save", 
             command=self.save,
             width=15
         )
-        save_btn.pack(side=tk.LEFT, padx=5)
+        self.save_btn.pack(side=tk.LEFT, padx=5)
         
         # TODO: Добавить проверку прав доступа для кнопок когда будет готов SecurityManager
         # Пример:
@@ -429,6 +425,15 @@ class ProfileEditor:
     
     def save(self):
         """Сохраняет профиль с PDF"""
+        # ПРОВЕРКА РЕЖИМА ДОСТУПА
+        if hasattr(self, 'access_mode') and self.access_mode == "READ_ONLY":
+            messagebox.showerror(
+                "Access Denied", 
+                "This profile is in READ ONLY mode.\n"
+                "You cannot modify it. Contact an administrator."
+            )
+            return
+        
         # Безопасность: проверяем права сохранения
         if not self._check_security('create_profile' if not self.is_editing else 'edit_profile'):
             return
@@ -598,6 +603,85 @@ class ProfileEditor:
             except Exception as e:
                 show_error(self.window, "Error", f"Delete failed: {e}")
     
+    def _apply_access_mode(self):
+        """Применяет режим доступа (READ ONLY или FULL ACCESS) к виджетам"""
+        # Проверяем текущий режим безопасности из приложения
+        try:
+            from config.security import get_security_mode
+            security_mode = get_security_mode()
+        except ImportError:
+            security_mode = "full_access"  # По умолчанию
+        
+        # Определяем режим доступа
+        if security_mode == "read_only":
+            access_mode = "READ_ONLY"
+        else:
+            access_mode = "FULL_ACCESS"
+        
+        # Дополнительная проверка: если профиль заблокирован
+        if self.profile and hasattr(self.profile, 'locked') and self.profile.locked:
+            access_mode = "READ_ONLY"
+        
+        print(f"DEBUG: Applying access mode: {access_mode}")  # Debug print
+        
+        # Применяем режим
+        if access_mode == "READ_ONLY":
+            state = "disabled"
+            bg_color = "#f0f0f0"
+            readonly_text = " (READ ONLY)"
+            
+            # Обновляем заголовок окна
+            current_title = self.window.title()
+            if "(READ ONLY)" not in current_title:
+                self.window.title(f"{current_title} {readonly_text}")
+        else:
+            state = "normal"
+            bg_color = "white"
+        
+        # Применяем состояние ко всем редактируемым виджетам
+        widgets = [
+            self.name_entry,
+            self.desc_text,
+            self.feed_entry,
+            self.material_entry,
+            self.product_entry,
+            self.upload_btn,
+            self.remove_btn
+        ]
+        
+        # Добавляем кнопки если они есть
+        if hasattr(self, 'save_btn'):
+            widgets.append(self.save_btn)
+        if hasattr(self, 'delete_btn'):
+            widgets.append(self.delete_btn)
+        if hasattr(self, 'cancel_btn'):
+            widgets.append(self.cancel_btn)
+        
+        for widget in widgets:
+            if widget:
+                try:
+                    widget.configure(state=state)
+                    # Для виджетов с background
+                    if hasattr(widget, 'configure') and 'background' in widget.configure():
+                        widget.configure(background=bg_color)
+                except Exception as e:
+                    print(f"DEBUG: Error setting widget state: {e}")  # Debug print
+        
+        # Для Text виджета устанавливаем состояние отдельно
+        if self.desc_text:
+            try:
+                self.desc_text.configure(state=state)
+                if state == "normal":
+                    self.desc_text.configure(bg="white")
+                else:
+                    self.desc_text.configure(bg="#f0f0f0")
+            except Exception as e:
+                print(f"DEBUG: Error setting desc_text: {e}")
+        
+        # Сохраняем режим доступа
+        self.access_mode = access_mode
+        logger.info(f"Access mode applied: {access_mode}")
+    
     # ========== МЕТОДЫ БЕЗОПАСНОСТИ ==========
     
     def _check_security(self, action: str) -> bool:
@@ -610,6 +694,11 @@ class ProfileEditor:
         Returns:
             bool: True если разрешено, False если запрещено
         """
+        # Сначала проверяем текущий режим доступа
+        if hasattr(self, 'access_mode') and self.access_mode == "READ_ONLY":
+            logger.warning(f"Action denied in READ ONLY mode: {action}")
+            return False
+        
         # TODO: Реализовать через SecurityManager когда будет готов
         # Пример:
         # try:

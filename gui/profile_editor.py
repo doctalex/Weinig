@@ -544,8 +544,8 @@ class ProfileEditor:
                     feed_rate=feed_rate,
                     material_size=material_size,
                     product_size=product_size,
-                    pdf_data=self.pdf_data,
-                    pdf_filename=self.pdf_filename
+                    #pdf_data=self.pdf_data,
+                    #pdf_filename=self.pdf_filename
                 )
                 action = "updated"
             else:
@@ -556,8 +556,8 @@ class ProfileEditor:
                     feed_rate=feed_rate,
                     material_size=material_size,
                     product_size=product_size,
-                    pdf_data=self.pdf_data,
-                    pdf_filename=self.pdf_filename
+                    #pdf_data=self.pdf_data,
+                    #pdf_filename=self.pdf_filename
                 )
                 success = profile_id is not None
                 action = "created"

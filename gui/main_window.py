@@ -75,7 +75,81 @@ class WeinigHydromatManager:
             9: "3 TOP", 10: "3 BOTTOM"
         }
         
-        # ОБНОВЛЯЕМ ИНТЕРФЕЙС С УЧЕТОМ ТЕКУЩЕГО РЕЖИМА (НОВОЕ)
+        # Инициализация менеджера бэкапов
+        from utils.backup_manager import BackupManager
+        self.backup_manager = BackupManager('tools_database.db')
+        
+        # Горячие клавиши для бэкапа
+        self.root.bind('<Control-B>', lambda e: self.create_backup())
+        self.root.bind('<Control-Shift-B>', lambda e: self.show_backup_manager())
+        
+        # Автоматический бэкап при запуске (1 раз в день)
+        self._auto_backup_on_startup()
+
+    def _auto_backup_on_startup(self):
+        """Автоматическое создание бэкапа при запуске (1 раз в день)"""
+        try:
+            from datetime import datetime, timedelta
+            
+            # Проверяем, когда был последний авто-бэкап
+            backups = self.backup_manager.list_backups()
+            auto_backups = [b for b in backups if 'auto' in b['name']]
+            
+            # Если сегодня еще не было авто-бэкапа
+            today = datetime.now().date()
+            need_backup = True
+            
+            for backup in auto_backups:
+                if backup['created'].date() == today:
+                    need_backup = False
+                    break
+            
+            if need_backup and auto_backups:
+                # Бэкапим только если со времени последнего прошло больше 24 часов
+                last_backup = max(auto_backups, key=lambda x: x['created'])
+                hours_since_last = (datetime.now() - last_backup['created']).total_seconds() / 3600
+                
+                if hours_since_last < 24:
+                    need_backup = False
+            
+            if need_backup:
+                self.backup_manager.create_backup(backup_type="auto", max_backups=30)
+                logger.info("Automatic daily backup created")
+                
+        except Exception as e:
+            logger.error(f"Error in auto backup: {e}")
+
+    def create_backup(self):
+        """Создание резервной копии базы данных"""
+        try:
+            from tkinter import messagebox
+            
+            backup_info = self.backup_manager.create_backup(backup_type="manual", max_backups=20)
+            
+            if backup_info:
+                messagebox.showinfo(
+                    "Backup Created",
+                    f"✓ Database backup created successfully!\n\n"
+                    f"File: {backup_info['name']}\n"
+                    f"Size: {backup_info['size_mb']:.2f} MB\n"
+                    f"Time: {backup_info['timestamp']}"
+                )
+                return True
+            else:
+                messagebox.showerror("Backup Error", "Failed to create backup")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error creating backup: {e}")
+            messagebox.showerror("Backup Error", f"Error: {str(e)}")
+            return False
+
+    def show_backup_manager(self):
+        """Показывает менеджер резервных копий"""
+        from gui.backup_manager_window import BackupManagerWindow
+        BackupManagerWindow(self.root, self.backup_manager)
+        
+        # ОБНОВЛЯЕМ ИНТЕРФЕЙС С УЧЕТОМ ТЕКУЩЕГО РЕЖИМА
         self.update_ui_for_security_mode()
     
     def _setup_hotkeys(self):

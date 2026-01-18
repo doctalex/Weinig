@@ -215,7 +215,49 @@ class WeinigHydromatManager:
         self.profile_desc_var.set(profile.description or "No description")
         self.feed_rate_var.set(f"{profile.feed_rate} m/min" if profile.feed_rate else "")
         self.material_size_var.set(profile.material_size or "Not specified")
-        self.product_size_var.set(profile.product_size or "Not specified")
+        
+        # ВАЖНО: Получаем актуальный product_size
+        # Сначала пытаемся получить из самого профиля
+        product_size = getattr(profile, 'product_size', '')
+        
+        # Если в профиле пусто, пытаемся получить из вариантов размеров
+        if not product_size:
+            try:
+                from services.size_service import SizeService
+                size_service = SizeService()
+                variants = size_service.get_product_variants_for_profile(profile.id)
+                
+                if variants:
+                    # Находим default вариант или берем первый
+                    default_variant = None
+                    for variant in variants:
+                        if variant.get('is_default'):
+                            default_variant = variant
+                            break
+                    
+                    if not default_variant and variants:
+                        default_variant = variants[0]
+                    
+                    if default_variant:
+                        thickness = default_variant.get('thickness')
+                        if thickness:
+                            product_size = f"{default_variant['width']} x {thickness}"
+                        else:
+                            product_size = f"{default_variant['width']}"
+                        
+                        # Обновляем профиль в БД для будущих загрузок
+                        self.profile_service.update_profile_product_size(
+                            profile.id, product_size
+                        )
+                    else:
+                        product_size = "Not specified"
+                else:
+                    product_size = "Not specified"
+            except Exception as e:
+                print(f"DEBUG: Error loading product size: {e}")
+                product_size = "Not specified"
+        
+        self.product_size_var.set(product_size)
         
         # Загружаем превью PDF (первая страница)
         self._load_profile_preview(profile.get_preview())
@@ -721,7 +763,7 @@ class WeinigHydromatManager:
             self._show_preview_large(profile)
         else:
             # Нет ни PDF, ни превью
-            show_info(self.root, "Info", "No document available for this profile")
+            show_info(self.root, "Info", "No sketch available for this profile")
     
     def _show_preview_large(self, profile: Profile):
         """Показывает увеличенное превью профиля в полноэкранном режиме с зумом и перемещением"""

@@ -1,3 +1,4 @@
+# gui/profile_editor.py
 """
 Редактор профилей с поддержкой PDF
 """
@@ -15,6 +16,7 @@ from services.profile_service import ProfileService
 from gui.base.dialogs import show_error, show_info, ask_yesno
 from gui.base.widgets import ImagePreview
 from utils.logger import log_profile_change
+from services.size_service import SizeService
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +31,42 @@ class ProfileEditor:
         self.profile_service = profile_service
         self.profile = profile
         self.callback = callback
+        self.size_service = SizeService()
         
+        # ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ ДЛЯ ВИДЖЕТОВ
+        self.save_btn = None
+        self.cancel_btn = None
+        self.delete_btn = None
+        self.upload_btn = None
+        self.remove_btn = None
+        self.pdf_status_label = None
+        self.pdf_preview = None
+        self.name_entry = None
+        self.desc_text = None
+        self.feed_entry = None
+        self.material_combo = None
+        self.product_tree = None
+
+        
+        # Списки для хранения вариантов
+        self.product_variants = []  # список объектов ProductSizeVariant
+        self.edited_variants = []   # варианты, добавленные/измененные в этой сессии
+        self.deleted_variant_ids = []  # ID удаленных вариантов
+
         # PDF данные вместо изображения
         self.pdf_data = None
         self.pdf_filename = None
+        self.original_pdf_data = None  # Сохраняем оригинальный PDF
+        self.original_pdf_filename = None  # Сохраняем оригинальное имя файла
+        
+        # Флаги для отслеживания изменений PDF
+        self.pdf_was_removed = False
+        self.pdf_was_uploaded = False
         
         self.is_editing = profile is not None
+        
+        # Флаг для защиты от двойного нажатия Save
+        self._saving = False
         
         # Получаем глобальный SecurityManager
         try:
@@ -49,86 +81,207 @@ class ProfileEditor:
         self.setup_ui()
     
     def setup_ui(self):
-        """Настройка интерфейса с фиксированными кнопками управления"""
-        # Создание окна
+        """Настройка интерфейса с оптимизированным расположением"""
+        # Создание окна - оптимальный размер
         self.window = tk.Toplevel(self.parent)
         title = "Edit Profile" if self.is_editing else "Add Profile"
         self.window.title(title)
-        self.window.geometry("650x750")  # Увеличиваем размеры
-        self.window.minsize(600, 700)
-        self.window.resizable(True, True)
+        self.window.geometry("800x850")  # Увеличили на 50px для комфорта
+        self.window.minsize(800, 700)
         
         # Делаем модальным
         self.window.transient(self.parent)
         self.window.grab_set()
         self.window.focus_set()
         
-        # Основная структура: 1) Скроллируемая форма, 2) Фиксированные кнопки
+        # Основной контейнер с отступами
         main_container = ttk.Frame(self.window)
-        main_container.pack(fill=tk.BOTH, expand=True)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        # Фрейм для скроллируемого контента (занимает всё пространство кроме кнопок)
-        scrollable_frame_container = ttk.Frame(main_container)
-        scrollable_frame_container.pack(fill=tk.BOTH, expand=True)
+        # 1. Имя профиля - как есть
+        name_frame = ttk.Frame(main_container)
+        name_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Canvas для прокрутки
-        canvas = tk.Canvas(scrollable_frame_container)
-        scrollbar = ttk.Scrollbar(scrollable_frame_container, orient="vertical", command=canvas.yview)
+        ttk.Label(name_frame, text="Profile Name:*", 
+                  font=("Arial", 10, "bold")).pack(anchor=tk.W)
+        self.name_var = tk.StringVar()
+        self.name_entry = ttk.Entry(name_frame, textvariable=self.name_var, 
+                                  font=("Arial", 11))
+        self.name_entry.pack(fill=tk.X, pady=(5, 0))
         
-        # Сохраняем ссылку на canvas в self
-        self.canvas = canvas
+        # 2. Описание - уменьшаем высоту
+        desc_frame = ttk.LabelFrame(main_container, text="Description", padding="6")
+        desc_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Фрейм внутри Canvas для размещения виджетов
-        scrollable_content = ttk.Frame(canvas)
+        self.desc_text = tk.Text(desc_frame, height=2, font=("Arial", 10))  # height=2 вместо 3
+        self.desc_text.pack(fill=tk.BOTH, expand=True)
         
-        # Настройка прокрутки
-        def _on_frame_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Показываем скроллбар только при необходимости
-            if scrollable_content.winfo_reqheight() > canvas.winfo_height():
-                scrollbar.pack(side="right", fill="y")
-                canvas.configure(yscrollcommand=scrollbar.set)
-            else:
-                scrollbar.pack_forget()
-                canvas.configure(yscrollcommand=None)
+        # 3. ОПТИМИЗИРУЕМ: Feed Rate и Material в одной строке!
+        params_frame = ttk.LabelFrame(main_container, text="Processing Parameters", padding="10")
+        params_frame.pack(fill=tk.X, pady=(0, 10))
         
-        scrollable_content.bind("<Configure>", _on_frame_configure)
+        # ГРИД для размещения в одной строке
+        params_grid = ttk.Frame(params_frame)
+        params_grid.pack(fill=tk.X)
         
-        # Создаем окно в Canvas
-        canvas.create_window((0, 0), window=scrollable_content, anchor="nw", width=canvas.winfo_width())
+        # Feed Rate слева
+        feed_group = ttk.Frame(params_grid)
+        feed_group.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 20))
         
-        def _configure_canvas(event):
-            canvas.itemconfig(1, width=event.width)  # Обновляем ширину окна в Canvas
+        ttk.Label(feed_group, text="Feed Rate:").pack(anchor=tk.W)
+        feed_input_frame = ttk.Frame(feed_group)
+        feed_input_frame.pack(fill=tk.X, pady=(2, 0))
         
-        canvas.bind('<Configure>', _configure_canvas)
+        self.feed_var = tk.StringVar(value="30")
+        self.feed_entry = ttk.Entry(feed_input_frame, textvariable=self.feed_var, width=8)
+        self.feed_entry.pack(side=tk.LEFT)
+        ttk.Label(feed_input_frame, text=" m/min").pack(side=tk.LEFT, padx=(2, 0))
         
-        # Упаковка Canvas
-        canvas.pack(side="left", fill="both", expand=True)
+        # Material справа
+        material_group = ttk.Frame(params_grid)
+        material_group.pack(side=tk.RIGHT, fill=tk.X, expand=True)
         
-        # Привязка колеса мыши - ИСПРАВЛЕННАЯ ВЕРСИЯ
-        def _on_mouse_wheel(event):
-            try:
-                # Используем self.canvas вместо локальной переменной
-                if hasattr(self, 'canvas') and self.canvas.winfo_exists():
-                    self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except (tk.TclError, AttributeError):
-                # Игнорируем ошибки, возникающие при уничтожении окна
-                pass
+        ttk.Label(material_group, text="Material Size:").pack(anchor=tk.W)
         
-        # Привязываем с использованием self.canvas
-        self._mouse_wheel_binding = self.canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
+        # Загружаем размеры из справочника
+        material_sizes = self.size_service.get_all_material_sizes()
+        size_names = [s.display_name() for s in material_sizes]
+        size_names.insert(0, "")
         
-        # Настройка формы внутри скроллируемого контента
-        self._setup_form(scrollable_content)
+        self.material_size_var = tk.StringVar()
+        material_input_frame = ttk.Frame(material_group)
+        material_input_frame.pack(fill=tk.X, pady=(2, 0))
         
-        # Фрейм для кнопок управления (ВСЕГДА ВИДИМЫЙ)
-        button_frame = ttk.Frame(main_container, height=70)  # Фиксированная высота
-        button_frame.pack_propagate(False)  # Не менять высоту
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(10, 10))
+        self.material_combo = ttk.Combobox(
+            material_input_frame,
+            textvariable=self.material_size_var,
+            values=size_names,
+            state="normal",
+            width=25
+        )
+        self.material_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # Настройка кнопок
-        self._setup_buttons(button_frame)
+        # 4. Размеры продукта - можно немного уменьшить высоту таблицы
+        product_frame = ttk.LabelFrame(main_container, text="Product Sizes", padding="8")
+        product_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
+        # Таблица вариантов - height=4 вместо 5
+        columns = ("Width", "Thickness", "Default")
+        self.product_tree = ttk.Treeview(
+            product_frame,
+            columns=columns,
+            show="headings",
+            height=4  # Уменьшили высоту
+        )
+        self.product_tree.bind("<Double-1>", self._on_variant_double_click)
+        self.product_tree.heading("Width", text="Width (mm)")
+        self.product_tree.heading("Thickness", text="Thickness (mm)")
+        self.product_tree.heading("Default", text="Active")
+        
+        self.product_tree.column("Width", width=80, anchor="center")
+        self.product_tree.column("Thickness", width=100, anchor="center")
+        self.product_tree.column("Default", width=60, anchor="center")
+        
+        scrollbar = ttk.Scrollbar(product_frame, orient="vertical",
+                                 command=self.product_tree.yview)
+        self.product_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.product_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Кнопки управления вариантами (вертикально)
+        variant_btn_frame = ttk.Frame(product_frame)
+        variant_btn_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        
+        # Делаем кнопки меньше
+        button_config = {'width': 7, 'padding': (2, 2)}
+        ttk.Button(variant_btn_frame, text="Add", command=self._add_product_variant, **button_config).pack(pady=(0, 2))
+        ttk.Button(variant_btn_frame, text="Edit", command=self._edit_product_variant, **button_config).pack(pady=2)
+        ttk.Button(variant_btn_frame, text="Delete", command=self._delete_product_variant, **button_config).pack(pady=2)
+        ttk.Button(variant_btn_frame, text="Up", command=lambda: self._move_variant(-1), **button_config).pack(pady=2)
+        ttk.Button(variant_btn_frame, text="Down", command=lambda: self._move_variant(1), **button_config).pack(pady=2)
+        
+        # 5. PDF документ - упрощаем
+        pdf_frame = ttk.LabelFrame(main_container, text="Profile Document (PDF)", padding="8")
+        pdf_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # Статус и кнопки в одной строке
+        pdf_top_frame = ttk.Frame(pdf_frame)
+        pdf_top_frame.pack(fill=tk.X, pady=(0, 8))
+        
+        self.pdf_status_label = ttk.Label(
+            pdf_top_frame,
+            text="No PDF loaded",
+            foreground="gray",
+            font=("Arial", 9)
+        )
+        self.pdf_status_label.pack(side=tk.LEFT, anchor=tk.W, fill=tk.X, expand=True)
+        
+        # Кнопки управления PDF
+        pdf_btn_frame = ttk.Frame(pdf_top_frame)
+        pdf_btn_frame.pack(side=tk.RIGHT)
+        
+        self.upload_btn = ttk.Button(pdf_btn_frame, text="Upload", 
+                                    command=self.upload_pdf, width=8)
+        self.upload_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.remove_btn = ttk.Button(pdf_btn_frame, text="Remove", 
+                                    command=self.remove_pdf, width=8)
+        self.remove_btn.pack(side=tk.LEFT)
+        
+        # Предпросмотр PDF - уменьшаем
+        preview_frame = ttk.Frame(pdf_frame)
+        preview_frame.pack(fill=tk.X)
+        
+        preview_inner = ttk.Frame(preview_frame, width=200, height=100)  # Уменьшили высоту
+        preview_inner.pack_propagate(False)
+        preview_inner.pack(pady=2)
+        
+        self.pdf_preview = ImagePreview(preview_inner, width=180, height=80)  # Уменьшили
+        self.pdf_preview.pack(expand=True, fill=tk.BOTH)
+        
+        # 6. КНОПКИ УПРАВЛЕНИЯ - ВИДИМЫЕ!
+        # Добавляем разделитель перед кнопками
+        ttk.Separator(main_container, orient='horizontal').pack(fill=tk.X, pady=(15, 10))
+
+        button_frame = ttk.Frame(main_container)
+        button_frame.pack(fill=tk.X, pady=(0, 0))
+
+        # Распределяем кнопки равномерно
+        if self.is_editing:
+            # Для редактирования: Delete | [Cancel] [Save]
+            # СОХРАНЯЕМ ССЫЛКУ В self.delete_btn
+            self.delete_btn = ttk.Button(button_frame, text="Delete Profile", 
+                          command=self.delete, width=15)
+            self.delete_btn.pack(side=tk.LEFT)
+            
+            spacer = ttk.Frame(button_frame)
+            spacer.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            # СОХРАНЯЕМ ССЫЛКУ В self.cancel_btn
+            self.cancel_btn = ttk.Button(button_frame, text="Cancel", 
+                          command=self.window.destroy, width=12)
+            self.cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
+            
+            # СОХРАНЯЕМ ССЫЛКУ В self.save_btn
+            self.save_btn = ttk.Button(button_frame, text="Save", 
+                          command=self._safe_save, width=12)
+            self.save_btn.pack(side=tk.LEFT)
+        else:
+            # Для добавления: [Cancel] [Save]
+            spacer = ttk.Frame(button_frame)
+            spacer.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            # СОХРАНЯЕМ ССЫЛКУ В self.cancel_btn
+            self.cancel_btn = ttk.Button(button_frame, text="Cancel", 
+                          command=self.window.destroy, width=12)
+            self.cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
+            
+            # СОХРАНЯЕМ ССЫЛКУ В self.save_btn
+            self.save_btn = ttk.Button(button_frame, text="Save", 
+                          command=self._safe_save, width=12)
+            self.save_btn.pack(side=tk.LEFT)
+            
         # Загружаем данные профиля если редактируем
         if self.is_editing and self.profile:
             self._load_profile_data()
@@ -143,186 +296,712 @@ class ProfileEditor:
         # Обработчик закрытия окна
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         
-        # Обновляем прокрутку после загрузки
-        self.window.after(100, lambda: _on_frame_configure(None))
-        
         # Сразу применяем режим доступа после создания всех виджетов
         self.window.after(150, self._apply_access_mode)
 
     def _on_close(self):
         """Обработчик закрытия окна"""
         try:
-            # Отписываемся от SecurityManager
             if hasattr(self, 'security_manager') and self.security_manager:
                 try:
                     self.security_manager.remove_callback(self._on_security_mode_changed)
-                    print("DEBUG: Unsubscribed from security changes")
-                except Exception as e:
-                    print(f"DEBUG: Error unsubscribing from security: {e}")
-            
-            # Удаляем привязку колеса мыши - ВАЖНО: ДО уничтожения окна!
-            try:
-                if hasattr(self, '_mouse_wheel_binding'):
-                    # Очищаем все привязки MouseWheel
-                    self.window.unbind_all("<MouseWheel>")
-                    # Также отключаем конкретную привязку если она была сохранена
-                    if hasattr(self, 'canvas'):
-                        try:
-                            self.canvas.unbind_all("<MouseWheel>")
-                        except:
-                            pass
-            except Exception as e:
-                print(f"DEBUG: Error removing mouse wheel binding: {e}")
-                
-        except Exception as e:
-            logger.warning(f"Ошибка при закрытии окна: {e}")
+                except:
+                    pass
+        except:
+            pass
         
-        # Закрываем окно
         try:
             self.window.destroy()
         except:
             pass
 
-    def _setup_form(self, parent):
-        """Настройка формы ввода с управлением состоянием READ ONLY"""
-        # Имя профиля
-        name_frame = ttk.Frame(parent)
-        name_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(name_frame, text="Profile Name:*", 
-                  font=("Arial", 10, "bold")).pack(anchor=tk.W)
-        self.name_var = tk.StringVar()
-        self.name_entry = ttk.Entry(name_frame, textvariable=self.name_var, 
-                                  font=("Arial", 11))
-        self.name_entry.pack(fill=tk.X, pady=(5, 0))
-        
-        # Описание
-        desc_frame = ttk.LabelFrame(parent, text="Description", padding="10")
-        desc_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.desc_text = tk.Text(desc_frame, height=4, font=("Arial", 10))
-        self.desc_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Параметры обработки
-        params_frame = ttk.LabelFrame(parent, text="Processing Parameters", padding="10")
-        params_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Скорость подачи
-        feed_frame = ttk.Frame(params_frame)
-        feed_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Label(feed_frame, text="Feed Rate:", width=12).pack(side=tk.LEFT)
-        self.feed_var = tk.StringVar(value="30")
-        self.feed_entry = ttk.Entry(feed_frame, textvariable=self.feed_var, width=10)
-        self.feed_entry.pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Label(feed_frame, text="m/min").pack(side=tk.LEFT, padx=(5, 0))
-        
-        # Размеры
-        size_frame = ttk.Frame(params_frame)
-        size_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        ttk.Label(size_frame, text="Material Size:", width=12).pack(side=tk.LEFT)
-        self.material_var = tk.StringVar(value="")
-        self.material_entry = ttk.Entry(size_frame, textvariable=self.material_var, width=15)
-        self.material_entry.pack(side=tk.LEFT, padx=(5, 0))
-        
-        ttk.Label(size_frame, text="Product Size:", width=12).pack(side=tk.LEFT, padx=(10, 0))
-        self.product_var = tk.StringVar(value="")
-        self.product_entry = ttk.Entry(size_frame, textvariable=self.product_var, width=15)
-        self.product_entry.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # PDF документ вместо изображения
-        pdf_frame = ttk.LabelFrame(parent, text="Profile Document (PDF)", padding="10")
-        pdf_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Кнопки управления PDF
-        pdf_btn_frame = ttk.Frame(pdf_frame)
-        pdf_btn_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        self.upload_btn = ttk.Button(pdf_btn_frame, text="Upload PDF Document", 
-                                    command=self.upload_pdf)
-        self.upload_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.remove_btn = ttk.Button(pdf_btn_frame, text="Remove PDF", 
-                                    command=self.remove_pdf)
-        self.remove_btn.pack(side=tk.LEFT)
-        
-        # Статус PDF
-        self.pdf_status_label = ttk.Label(
-            pdf_frame,
-            text="No PDF document loaded",
-            foreground="gray",
-            font=("Arial", 9)
-        )
-        self.pdf_status_label.pack(anchor=tk.W, pady=(0, 5))
-        
-        # Предпросмотр первой страницы PDF
-        preview_container = ttk.LabelFrame(pdf_frame, text="PDF Preview (First Page)", padding="10")
-        preview_container.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
-        
-        preview_inner = ttk.Frame(preview_container, width=200, height=150)
-        preview_inner.pack_propagate(False)
-        preview_inner.pack(pady=5)
-        
-        # Image preview для показа первой страницы PDF
-        self.pdf_preview = ImagePreview(preview_inner, width=180, height=120)
-        self.pdf_preview.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
-        
-        # Подсказка
-        info_label = ttk.Label(
-            pdf_frame,
-            text="Double-click preview to open PDF in viewer",
-            foreground="blue",
-            font=("Arial", 8, "italic")
-        )
-        info_label.pack(anchor=tk.W, pady=(5, 0))
+    def _open_material_sizes_dialog(self):
+        """Временная заглушка для диалога размеров материала"""
+        messagebox.showinfo("Info", "Material sizes management will be available in the next version")
+        # TODO: Реализовать MaterialSizesDialog
     
-    def _setup_buttons(self, parent):
-        """Настройка кнопок - размещаем по центру внизу"""
-        # Контейнер для кнопок с фиксированной высотой
-        container = ttk.Frame(parent)
-        container.pack(fill=tk.X, pady=20)
+    def _refresh_material_sizes(self):
+        """Обновить список размеров материала в комбобоксе"""
+        material_sizes = self.size_service.get_all_material_sizes()
+        size_names = [s.display_name() for s in material_sizes]
+        size_names.insert(0, "")
         
-        # Фрейм для центрирования кнопок
-        button_frame = ttk.Frame(container)
-        button_frame.pack(expand=True)
+        current_value = self.material_size_var.get()
+        self.material_combo['values'] = size_names
         
-        # Кнопка удаления (только при редактировании)
-        if self.is_editing:
-            self.delete_btn = ttk.Button(
-                button_frame, 
-                text="Delete", 
-                command=self.delete,
-                width=15
+        if current_value in size_names:
+            self.material_size_var.set(current_value)
+    
+    def _parse_material_size(self, text: str):
+        """
+        Принимает строку '140 x 27'
+        Возвращает (width, thickness) или None
+        """
+        try:
+            parts = text.lower().replace("×", "x").split("x")
+            if len(parts) != 2:
+                return None
+
+            width = float(parts[0].strip())
+            thickness = float(parts[1].strip())
+
+            if width <= 0 or thickness <= 0:
+                return None
+
+            return width, thickness
+        except:
+            return None
+    
+    def _add_product_variant(self):
+        """Упрощенный диалог добавления варианта"""
+        from gui.simple_variant_dialog import SimpleVariantDialog
+        
+        dialog = SimpleVariantDialog(
+            self.window,
+            title="Add Product Size"
+        )
+        
+        if dialog.result:
+            width, thickness = dialog.result
+            try:
+                width_val = float(width)
+                thickness_val = float(thickness) if thickness.strip() else None
+                
+                variant_data = {
+                    'temp_id': len(self.edited_variants) + 1000,
+                    'width': width_val,
+                    'thickness': thickness_val,
+                    'is_default': False  # Первый добавленный будет по умолчанию
+                }
+                
+                # Если это первый вариант, делаем его default
+                if not self.product_variants:
+                    variant_data['is_default'] = True
+                
+                # Добавляем в ОБА списка
+                self.edited_variants.append(variant_data)
+                self.product_variants.append(variant_data)  # ЭТОЙ СТРОКИ НЕ БЫЛО!
+                
+                self._update_product_variants_table()
+                
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numeric values")
+    
+    def _edit_product_variant(self):
+        """Редактировать выбранный вариант"""
+        selection = self.product_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a variant to edit")
+            return
+        
+        item = selection[0]
+        item_data = self.product_tree.item(item)
+        values = item_data['values']
+        
+        from gui.simple_variant_dialog import SimpleVariantDialog
+        
+        dialog = SimpleVariantDialog(
+            self.window,
+            title="Edit Product Size",
+            initial_values=values[:2]  # Только width и thickness
+        )
+        
+        if dialog.result:
+            width, thickness = dialog.result
+            try:
+                width_val = float(width)
+                thickness_val = float(thickness) if thickness.strip() else None
+                
+                # Находим и обновляем вариант
+                variant_id = int(item.split('_')[-1])
+                for variant in self.product_variants:
+                    if variant.get('id') == variant_id or variant.get('temp_id') == variant_id:
+                        variant['width'] = width_val
+                        variant['thickness'] = thickness_val
+                        break
+                
+                self._update_product_variants_table()
+                
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numeric values")
+    
+    def _delete_product_variant(self):
+        """Удалить выбранный вариант"""
+        selection = self.product_tree.selection()
+        if not selection:
+            return
+        
+        for item in selection:
+            variant_id = int(item.split('_')[-1])
+            
+            # Если это существующий вариант (ID > 0), добавляем в список удаленных
+            if variant_id > 0 and variant_id < 1000:
+                self.deleted_variant_ids.append(variant_id)
+            
+            # Удаляем из отображаемых списков
+            self.product_variants = [v for v in self.product_variants 
+                                   if v.get('id') != variant_id and v.get('temp_id') != variant_id]
+            self.edited_variants = [v for v in self.edited_variants 
+                                  if v.get('id') != variant_id and v.get('temp_id') != variant_id]
+        
+        self._update_product_variants_table()
+    
+    def _move_variant(self, direction):
+        """Переместить вариант вверх/вниз"""
+        selection = self.product_tree.selection()
+        if not selection:
+            return
+        
+        item = selection[0]
+        item_id = int(item.split('_')[-1])
+        
+        # Находим индекс в списке
+        for i, variant in enumerate(self.product_variants):
+            if variant.get('id') == item_id or variant.get('temp_id') == item_id:
+                new_index = i + direction
+                if 0 <= new_index < len(self.product_variants):
+                    # Меняем местами
+                    self.product_variants[i], self.product_variants[new_index] = \
+                        self.product_variants[new_index], self.product_variants[i]
+                    break
+        
+        self._update_product_variants_table()
+    
+    def _update_product_variants_table(self):
+        """Обновить таблицу вариантов"""
+        # Очищаем таблицу
+        for item in self.product_tree.get_children():
+            self.product_tree.delete(item)
+        
+        # Добавляем все варианты ИЗ self.product_variants
+        for i, variant in enumerate(self.product_variants):
+            thickness = variant.get('thickness', '')
+            if thickness:
+                thickness = f"{thickness}"
+            
+            values = (
+                variant.get('width', ''),
+                thickness,
+                '✓' if variant.get('is_default') else ''
             )
-            self.delete_btn.pack(side=tk.LEFT, padx=5)
+            
+            item_id = f"variant_{variant.get('id', variant.get('temp_id', i))}"
+            self.product_tree.insert('', 'end', iid=item_id, values=values)
+    
+    def _on_variant_double_click(self, event):
+        item_id = self.product_tree.focus()
+        if not item_id:
+            return
+
+        variant_id = int(item_id.split('_')[-1])
+
+        # 1. Снимаем Active со всех
+        for v in self.product_variants:
+            v['is_default'] = False
+
+        # 2. Активируем выбранный
+        for v in self.product_variants:
+            if v.get('id') == variant_id or v.get('temp_id') == variant_id:
+                v['is_default'] = True
+                break
+
+        # 3. Обновляем таблицу
+        self._update_product_variants_table()
+            
+    def _get_selected_material_size(self):
+        """Получить выбранный объект MaterialSize"""
+        selected_name = self.material_size_var.get()
+        if not selected_name:
+            return None
         
-        # Кнопка отмены
-        self.cancel_btn = ttk.Button(
-            button_frame, 
-            text="Cancel", 
-            command=self.window.destroy,
-            width=15
+        material_sizes = self.size_service.get_all_material_sizes()
+        for size in material_sizes:
+            if size.display_name() == selected_name:
+                return size
+        return None
+    
+    def _load_profile_data(self):
+        """Загружает данные профиля в форму"""
+        if not self.profile:
+            return
+        
+        self.name_var.set(self.profile.name)
+        self.desc_text.insert("1.0", self.profile.description)
+        self.feed_var.set(str(self.profile.feed_rate))
+        
+        # Размер материала
+        if self.profile.material_size:
+            self.material_size_var.set(self.profile.material_size)
+        
+        # Варианты размеров продукта
+        if hasattr(self.profile, 'id') and self.profile.id:
+            self.product_variants = self.size_service.get_product_variants_for_profile(self.profile.id)
+        else:
+            self.product_variants = []
+        
+        self._update_product_variants_table()
+        
+        # Загружаем статус PDF
+        if self.profile.has_pdf:
+            self.pdf_status_label.config(
+                text=f"PDF: {os.path.basename(self.profile.pdf_path)}",
+                foreground="green"
+            )
+            
+            # Загружаем существующий PDF в память
+            try:
+                self.original_pdf_data = self.profile_service.get_profile_pdf(self.profile.id)
+                self.original_pdf_filename = os.path.basename(self.profile.pdf_path)
+                
+                # Устанавливаем текущие данные PDF равными оригинальным
+                self.pdf_data = self.original_pdf_data
+                self.pdf_filename = self.original_pdf_filename
+            except Exception as e:
+                print(f"DEBUG: Error loading existing PDF: {e}")
+                self.original_pdf_data = None
+                self.original_pdf_filename = None
+                self.pdf_data = None
+                self.pdf_filename = None
+        else:
+            self.pdf_status_label.config(
+                text="No PDF document loaded",
+                foreground="gray"
+            )
+            self.original_pdf_data = None
+            self.original_pdf_filename = None
+        
+        # Загружаем превью PDF если есть
+        if self.profile.image_data:
+            self.pdf_preview.set_image(self.profile.image_data)
+    
+    def upload_pdf(self):
+        """Выбирает PDF файл профиля"""
+        if not self._check_security('upload_documents'):
+            return
+        
+        filename = filedialog.askopenfilename(
+            title="Select PDF Document",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            parent=self.window
         )
-        self.cancel_btn.pack(side=tk.LEFT, padx=5)
         
-        # Кнопка сохранения
-        self.save_btn = ttk.Button(
-            button_frame, 
-            text="Save", 
-            command=self.save,
-            width=15
+        if filename:
+            try:
+                if not filename.lower().endswith('.pdf'):
+                    show_error(self.window, "Error", "Please select a PDF file (.pdf)")
+                    return
+                
+                file_size = os.path.getsize(filename)
+                if file_size > 50 * 1024 * 1024:
+                    show_error(self.window, "Error", "PDF file is too large. Maximum size is 50MB.")
+                    return
+                
+                with open(filename, "rb") as f:
+                    self.pdf_data = f.read()
+                
+                self.pdf_filename = os.path.basename(filename)
+                self.pdf_was_uploaded = True
+                self.pdf_was_removed = False
+                
+                # Извлекаем превью из PDF
+                try:
+                    from utils.pdf_manager import PDFManager
+                    pdf_manager = PDFManager()
+                    preview = pdf_manager.extract_pdf_preview(self.pdf_data)
+                    
+                    if preview:
+                        self.pdf_preview.set_image(preview)
+                        self.pdf_status_label.config(
+                            text=f"PDF: {self.pdf_filename}",
+                            foreground="green"
+                        )
+                    else:
+                        show_error(self.window, "Warning", 
+                                 "Could not extract preview from PDF.")
+                        self.pdf_data = None
+                        self.pdf_filename = None
+                        self.pdf_was_uploaded = False
+                        
+                except ImportError:
+                    show_error(self.window, "Error", 
+                             "PyMuPDF library is not installed.")
+                    self.pdf_data = None
+                    self.pdf_filename = None
+                    self.pdf_was_uploaded = False
+                
+            except Exception as e:
+                show_error(self.window, "Error", f"Could not load PDF: {e}")
+                self.pdf_data = None
+                self.pdf_filename = None
+                self.pdf_was_uploaded = False
+                self.pdf_status_label.config(text="No PDF loaded", foreground="gray")
+    
+    def remove_pdf(self):
+        """Удаляет PDF документ профиля"""
+        if not self._check_security('modify_profile'):
+            return
+        
+        current_status = self.pdf_status_label.cget("text")
+        if "No PDF document loaded" in current_status:
+            show_info(self.window, "Info", "No PDF document to remove")
+            return
+        
+        response = ask_yesno(
+            self.window, 
+            "Confirm Remove", 
+            "Are you sure you want to remove the PDF document from this profile?"
         )
-        self.save_btn.pack(side=tk.LEFT, padx=5)
         
-        # TODO: Добавить проверку прав доступа для кнопок когда будет готов SecurityManager
-        # Пример:
-        # if not self._check_security('delete_profile'):
-        #     delete_btn.config(state='disabled')
-        #     delete_btn.config(tooltip="Требуется роль 'admin' для удаления профилей")
+        if response:
+            self.pdf_data = None
+            self.pdf_filename = None
+            self.pdf_preview.clear()
+            self.pdf_status_label.config(
+                text="No PDF document loaded",
+                foreground="gray"
+            )
+            self.pdf_was_removed = True
+            self.pdf_was_uploaded = False
+    
+    def save(self):
+        """Сохраняет профиль с PDF"""
+        if self._saving:
+            return
+        self._saving = True
+        
+        try:
+            # ПРОВЕРКА РЕЖИМА ДОСТУПА
+            if hasattr(self, 'access_mode') and self.access_mode == "READ_ONLY":
+                messagebox.showerror(
+                    "Access Denied", 
+                    "This profile is in READ ONLY mode.\n"
+                    "You cannot modify it. Contact an administrator."
+                )
+                self._saving = False
+                self.save_btn.config(state='normal')
+                return
+            
+            # Безопасность: проверяем права сохранения
+            if not self._check_security('create_profile' if not self.is_editing else 'edit_profile'):
+                self._saving = False
+                self.save_btn.config(state='normal')
+                return
+            
+            # Валидация данных
+            name = self.name_var.get().strip()
+            if not name:
+                messagebox.showerror("Error", "Profile name is required")
+                self._saving = False
+                self.save_btn.config(state='normal')
+                return
+
+            description = self.desc_text.get("1.0", tk.END).strip()
+            
+            try:
+                feed_rate = float(self.feed_var.get())
+            except ValueError:
+                feed_rate = 30.0
+            
+            material_text = self.material_size_var.get().strip()
+
+            material_parsed = self._parse_material_size(material_text)
+            if material_text and not material_parsed:
+                messagebox.showerror(
+                    "Error",
+                    "Material size must be in format: WIDTH x THICKNESS\nExample: 140 x 27"
+                )
+                self._saving = False
+                self.save_btn.config(state='normal')
+                return
+
+            
+            # Определяем какие PDF данные передавать
+            pdf_data_to_save = None
+            pdf_filename_to_save = None
+            
+            if not self.is_editing:
+                pdf_data_to_save = self.pdf_data
+                pdf_filename_to_save = self.pdf_filename
+            else:
+                if self.pdf_was_uploaded:
+                    pdf_data_to_save = self.pdf_data
+                    pdf_filename_to_save = self.pdf_filename
+                elif self.pdf_was_removed:
+                    pdf_data_to_save = None
+                    pdf_filename_to_save = None
+                else:
+                    if self.original_pdf_data:
+                        pdf_data_to_save = self.original_pdf_data
+                        pdf_filename_to_save = None
+                    else:
+                        pdf_data_to_save = None
+                        pdf_filename_to_save = None
+
+            # Получаем выбранный объект MaterialSize
+            selected_material_size = self._get_selected_material_size()
+            material_size_str = selected_material_size.display_name() if selected_material_size else ""
+            
+            # Логирование
+            from utils.logger import log_profile_change
+            log_profile_change({
+                'name': name,
+                'feed_rate': feed_rate,
+                'material_size': material_size_str,
+                'product_size': "",
+                'tools': []
+            })
+
+            profile_id = None
+            action = ""
+            success = False
+            
+            if self.is_editing and self.profile:
+                # Update existing profile
+                profile_id = self.profile.id
+                success = self.profile_service.update_profile(
+                    self.profile.id,
+                    name=name,
+                    description=description,
+                    feed_rate=feed_rate,
+                    material_size=material_size_str,
+                    product_size="",  # оставляем пустым - обновим отдельно
+                    pdf_data=pdf_data_to_save,
+                    pdf_filename=pdf_filename_to_save
+                )
+                action = "updated"
+            else:
+                # Create new profile
+                profile_id = self.profile_service.create_profile(
+                    name=name,
+                    description=description,
+                    feed_rate=feed_rate,
+                    material_size=material_size_str,
+                    product_size="",  # оставляем пустым - обновим отдельно
+                    pdf_data=pdf_data_to_save,
+                    pdf_filename=pdf_filename_to_save
+                )
+                success = profile_id is not None
+                action = "created"
+                profile_id = profile_id
+
+            # ВАЖНО: Сохраняем варианты размеров продукта и обновляем product_size
+            if success and profile_id:
+                print(f"DEBUG: Saving {len(self.product_variants)} product variants for profile {profile_id}")
+                
+                # Формируем строку product_size для отображения в главном окне
+                product_size_str = self._get_product_size_string()
+                print(f"DEBUG: Product size string: '{product_size_str}'")
+                
+                # Обновляем поле product_size в профиле
+                update_success = self.profile_service.update_profile_product_size(
+                    profile_id, product_size_str
+                )
+                print(f"DEBUG: Updated profile product_size: {update_success}")
+                
+                # Сохраняем все варианты в базу данных
+                self._save_product_variants(profile_id)
+                
+                # Получаем обновленный профиль для callback
+                updated_profile = self.profile_service.get_profile_by_id(profile_id)
+                if updated_profile and hasattr(updated_profile, 'product_size'):
+                    print(f"DEBUG: Profile updated with product_size: {updated_profile.product_size}")
+
+            # Уведомление о результате
+            if success:
+                messagebox.showinfo("Success", f"Profile {action} successfully")
+                
+                # ПОЛНОЕ ОБНОВЛЕНИЕ ГЛАВНОГО ОКНА
+                print(f"DEBUG: Calling update functions for main window")
+                
+                # 1. Прямое обновление через родительское окно
+                try:
+                    if hasattr(self.parent, 'show_profile_details'):
+                        print(f"DEBUG: Calling parent.show_profile_details()")
+                        self.parent.show_profile_details()
+                    if hasattr(self.parent, 'load_profiles'):
+                        print(f"DEBUG: Calling parent.load_profiles()")
+                        self.parent.load_profiles()
+                    if hasattr(self.parent, 'load_profile_tools'):
+                        print(f"DEBUG: Calling parent.load_profile_tools()")
+                        self.parent.load_profile_tools()
+                except Exception as e:
+                    print(f"DEBUG: Error updating parent directly: {e}")
+                
+                # 2. Внешний callback
+                if hasattr(self, 'callback') and self.callback:
+                    print(f"DEBUG: Calling external callback")
+                    try:
+                        self.callback()
+                    except Exception as e:
+                        print(f"DEBUG: Callback error: {e}")
+                
+                # Сброс флагов
+                self.pdf_was_uploaded = False
+                self.pdf_was_removed = False
+                
+                # Закрытие окна
+                self.window.destroy()
+                
+            else:
+                messagebox.showerror("Error", f"Failed to {action} profile")
+                self._saving = False
+                if hasattr(self, 'save_btn'):
+                    self.save_btn.config(state='normal')
+
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+            print(f"DEBUG: Save error details: {e}")
+            import traceback
+            traceback.print_exc()
+            self._saving = False
+            if hasattr(self, 'save_btn'):
+                self.save_btn.config(state='normal')
+    
+    def _get_product_size_string(self):
+        """Формирует строку product_size для отображения в главном окне"""
+        if not self.product_variants:
+            return "Not specified"
+        
+        # Находим default вариант
+        default_variant = None
+        for variant in self.product_variants:
+            if variant.get('is_default'):
+                default_variant = variant
+                break
+        
+        # Если нет default, берем первый
+        if not default_variant and self.product_variants:
+            default_variant = self.product_variants[0]
+            # Отмечаем его как default для будущих операций
+            default_variant['is_default'] = True
+        
+        if not default_variant:
+            return "Not specified"
+        
+        # Форматируем строку
+        thickness = default_variant.get('thickness')
+        if thickness:
+            return f"{default_variant['width']} x {thickness}"
+        else:
+            return f"{default_variant['width']}"
+
+
+    def _save_product_variants(self, profile_id):
+        """Сохраняет все варианты размеров продукта в базу данных"""
+        try:
+            print(f"DEBUG: Saving {len(self.product_variants)} product variants")
+            
+            # Для редактирования: обрабатываем удаленные варианты
+            if self.is_editing:
+                # Удаляем помеченные варианты
+                for variant_id in self.deleted_variant_ids:
+                    print(f"DEBUG: Deleting variant ID {variant_id}")
+                    self.size_service.delete_product_variant(variant_id)
+                
+                # Сначала проверяем существующие варианты
+                existing_variants = self.size_service.get_product_variants_for_profile(profile_id)
+                existing_ids = [v['id'] for v in existing_variants if 'id' in v]
+                
+                # Обновляем/добавляем варианты
+                for variant in self.product_variants:
+                    variant_id = variant.get('id')
+                    
+                    if variant_id and variant_id in existing_ids:
+                        # Это существующий вариант - обновляем
+                        print(f"DEBUG: Updating existing variant ID {variant_id}")
+                        self.size_service.update_product_variant(
+                            variant_id=variant_id,
+                            width=variant['width'],
+                            thickness=variant.get('thickness'),
+                            is_default=variant.get('is_default', False)
+                        )
+                    else:
+                        # Это новый вариант
+                        print(f"DEBUG: Creating new variant for profile {profile_id}")
+                        self.size_service.create_product_variant(
+                            profile_id=profile_id,
+                            width=variant['width'],
+                            thickness=variant.get('thickness'),
+                            is_default=variant.get('is_default', False)
+                        )
+            else:
+                # Для нового профиля просто добавляем все варианты
+                for i, variant in enumerate(self.product_variants):
+                    print(f"DEBUG: Creating variant {i+1}/{len(self.product_variants)}")
+                    try:
+                        self.size_service.create_product_variant(
+                            profile_id=profile_id,
+                            width=variant['width'],
+                            thickness=variant.get('thickness'),
+                            is_default=variant.get('is_default', False)
+                        )
+                    except Exception as e:
+                        print(f"DEBUG: Error creating product variant: {e}")
+            
+            print(f"DEBUG: Product variants saved successfully")
+            
+        except Exception as e:
+            print(f"DEBUG: Error saving product variants: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _update_active_product_size(self):
+        variants = self.size_service.get_product_variants_for_profile(self.current_profile_id)
+
+        active = next((v for v in variants if v["is_default"]), None)
+        if not active:
+            return
+
+        if active["thickness"] is not None:
+            size_str = f'{active["width"]} x {active["thickness"]}'
+        else:
+            size_str = f'{active["width"]}'
+
+        # обновляем поле в главном окне
+        self.product_size_entry.delete(0, "end")
+        self.product_size_entry.insert(0, size_str)
+
+        # и сразу сохраняем в профиль
+        self.profile_service.update_profile_product_size(
+            self.current_profile_id,
+            size_str
+        )
+    
+    def delete(self):
+        """Удаляет профиль"""
+        if not self._check_security('delete_profile'):
+            return
+        
+        if not self.profile:
+            return
+        
+        # Подсчитываем инструменты
+        try:
+            tools_count = self.profile_service.count_tools(self.profile.id)
+        except:
+            tools_count = 0
+        
+        message = f"Delete profile '{self.profile.name}'?"
+        if tools_count > 0:
+            message += f"\n\n⚠️ WARNING: {tools_count} tool(s) will also be deleted!"
+        
+        if ask_yesno(self.window, "Confirm Delete", message):
+            try:
+                success = self.profile_service.delete_profile(self.profile.id)
+                
+                if success:
+                    show_info(self.window, "Success", "Profile deleted successfully")
+                    self.window.destroy()
+                    if self.callback:
+                        self.callback()
+                else:
+                    show_error(self.window, "Error", "Failed to delete profile")
+                    
+            except Exception as e:
+                show_error(self.window, "Error", f"Delete failed: {e}")
     
     def center_window(self):
-        """Центрирует окно относительно родительского"""
+        """Центрирует окно"""
         self.window.update_idletasks()
         
         try:
@@ -340,10 +1019,9 @@ class ProfileEditor:
                 
                 self.window.geometry(f"+{x}+{y}")
                 return
-        except Exception:
+        except:
             pass
         
-        # Fallback: центрирование по экрану
         screen_width = self.window.winfo_screenwidth()
         screen_height = self.window.winfo_screenheight()
         window_width = self.window.winfo_width()
@@ -354,327 +1032,30 @@ class ProfileEditor:
         
         self.window.geometry(f"+{x}+{y}")
     
-    def _load_profile_data(self):
-        """Загружает данные профиля в форму"""
-        if not self.profile:
-            return
-        
-        self.name_var.set(self.profile.name)
-        self.desc_text.insert("1.0", self.profile.description)
-        self.feed_var.set(str(self.profile.feed_rate))
-        self.material_var.set(self.profile.material_size)
-        self.product_var.set(self.profile.product_size)
-        
-        # Загружаем статус PDF
-        if self.profile.has_pdf:
-            self.pdf_status_label.config(
-                text=f"PDF: {os.path.basename(self.profile.pdf_path)}",
-                foreground="green"
-            )
-        
-        # Загружаем превью PDF
-        if self.profile.image_data:
-            self.pdf_preview.set_image(self.profile.image_data)
-    
-    def upload_pdf(self):
-        """Выбирает PDF файл профиля"""
-        # Безопасность: проверяем права загрузки PDF
-        if not self._check_security('upload_documents'):
-            return
-        
-        filename = filedialog.askopenfilename(
-            title="Select PDF Document",
-            filetypes=[
-                ("PDF files", "*.pdf"),
-                ("All files", "*.*")
-            ],
-            parent=self.window
-        )
-        
-        if filename:
-            try:
-                # Проверяем расширение файла
-                if not filename.lower().endswith('.pdf'):
-                    show_error(self.window, "Error", "Please select a PDF file (.pdf)")
-                    return
-                
-                # Проверяем размер файла (максимум 50MB)
-                file_size = os.path.getsize(filename)
-                if file_size > 50 * 1024 * 1024:  # 50MB
-                    show_error(self.window, "Error", "PDF file is too large. Maximum size is 50MB.")
-                    return
-                
-                # Загружаем PDF
-                with open(filename, "rb") as f:
-                    self.pdf_data = f.read()
-                
-                self.pdf_filename = os.path.basename(filename)
-                
-                # Извлекаем превью из PDF
-                try:
-                    from utils.pdf_manager import PDFManager
-                    pdf_manager = PDFManager()
-                    preview = pdf_manager.extract_pdf_preview(self.pdf_data)
-                    
-                    if preview:
-                        self.pdf_preview.set_image(preview)
-                        self.pdf_status_label.config(
-                            text=f"PDF: {self.pdf_filename}",
-                            foreground="green"
-                        )
-                        
-                        # Показываем информацию о файле
-                        show_info(self.window, "PDF Loaded", 
-                                 f"PDF document loaded successfully:\n"
-                                 f"File: {self.pdf_filename}\n"
-                                 f"Size: {file_size:,} bytes")
-                    else:
-                        show_error(self.window, "Warning", 
-                                 "Could not extract preview from PDF.\n"
-                                 "The file may be corrupted or protected.")
-                        self.pdf_data = None
-                        self.pdf_filename = None
-                        
-                except ImportError:
-                    show_error(self.window, "Error", 
-                             "PyMuPDF library is not installed.\n"
-                             "Please install it: pip install PyMuPDF")
-                    self.pdf_data = None
-                    self.pdf_filename = None
-                
-            except Exception as e:
-                show_error(self.window, "Error", f"Could not load PDF: {e}")
-                self.pdf_data = None
-                self.pdf_filename = None
-                self.pdf_status_label.config(text="No PDF loaded", foreground="gray")
-    
-    def remove_pdf(self):
-        """Удаляет PDF документ профиля"""
-        # Безопасность: проверяем права
-        if not self._check_security('modify_profile'):
-            return
-        
-        self.pdf_data = None
-        self.pdf_filename = None
-        self.pdf_preview.clear()
-        self.pdf_status_label.config(
-            text="No PDF document loaded",
-            foreground="gray"
-        )
-        
-        # TODO: Логирование удаления PDF
-        # self._log_security_action('remove_pdf', 'Удален PDF документ профиля')
-    
-    def save(self):
-        """Сохраняет профиль с PDF"""
-        # ПРОВЕРКА РЕЖИМА ДОСТУПА
-        if hasattr(self, 'access_mode') and self.access_mode == "READ_ONLY":
-            messagebox.showerror(
-                "Access Denied", 
-                "This profile is in READ ONLY mode.\n"
-                "You cannot modify it. Contact an administrator."
-            )
-            return
-        
-        # Безопасность: проверяем права сохранения
-        if not self._check_security('create_profile' if not self.is_editing else 'edit_profile'):
-            return
-        
-        print("Save method called - Start")  # Debug print
-        try:
-            print("Getting name...")  # Debug print
-            name = self.name_var.get().strip()
-            print(f"Name: {name}")  # Debug print
-            
-            if not name:
-                messagebox.showerror("Error", "Profile name is required")
-                return
-
-            description = self.desc_text.get("1.0", tk.END).strip()
-            
-            try:
-                feed_rate = float(self.feed_var.get())
-            except ValueError:
-                feed_rate = 30.0  # Значение по умолчанию
-            
-            material_size = self.material_var.get().strip()
-            product_size = self.product_var.get().strip()
-
-            # TODO: Логирование перед сохранением
-            # action_type = 'update' if self.is_editing else 'create'
-            # self._log_security_action(f'{action_type}_profile_attempt', 
-            #                          f'Попытка {action_type} профиля: {name}')
-            
-            # Prepare profile data for logging
-            profile_data = {
-                "action": "update" if self.is_editing else "create",
-                "description": description,
-                "feed_rate": feed_rate,
-                "material_size": material_size,
-                "product_size": product_size,
-                "has_pdf": bool(self.pdf_data),
-                "tool_assignments": {}  # Add empty tool assignments as they're not available here
-            }
-
-            # Ensure logs directory exists
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            log_dir = os.path.join(base_dir, "logs")
-            print(f"Base directory: {base_dir}")
-            print(f"Log directory: {log_dir}")
-            os.makedirs(log_dir, exist_ok=True)
-            print(f"Ensured log directory exists at: {log_dir}")
-
-            # Log the profile change
-            from utils.logger import log_profile_change
-            log_profile_change({
-                'name': name,
-                'feed_rate': profile_data.get('feed_rate', 0),
-                'material_size': profile_data.get('material_size', ''),
-                'product_size': profile_data.get('product_size', ''),
-                'tools': []  # Add tools if available in profile_data
-            })
-            print("Profile change logged successfully")
-
-            if self.is_editing and self.profile:
-                # Update existing profile with PDF
-                success = self.profile_service.update_profile(
-                    self.profile.id,
-                    name=name,
-                    description=description,
-                    feed_rate=feed_rate,
-                    material_size=material_size,
-                    product_size=product_size,
-                    #pdf_data=self.pdf_data,
-                    #pdf_filename=self.pdf_filename
-                )
-                action = "updated"
-            else:
-                # Create new profile with PDF
-                profile_id = self.profile_service.create_profile(
-                    name=name,
-                    description=description,
-                    feed_rate=feed_rate,
-                    material_size=material_size,
-                    product_size=product_size,
-                    #pdf_data=self.pdf_data,
-                    #pdf_filename=self.pdf_filename
-                )
-                success = profile_id is not None
-                action = "created"
-
-            if success:
-                # TODO: Логирование успешного сохранения
-                # self._log_security_action(f'{action_type}_profile_success', 
-                #                         f'Профиль успешно {action}: {name}')
-                
-                messagebox.showinfo("Success", f"Profile {action} successfully")
-                if self.on_save:
-                    self.on_save()
-                self.window.destroy()
-            else:
-                # TODO: Логирование ошибки сохранения
-                # self._log_security_action(f'{action_type}_profile_failed', 
-                #                         f'Ошибка при {action} профиля: {name}', 
-                #                         severity='HIGH')
-                
-                messagebox.showerror("Error", f"Failed to {action} profile")
-
-        except ValueError as ve:
-            messagebox.showerror("Input Error", f"Invalid input: {str(ve)}")
-        except PermissionError as pe:
-            # Ошибка режима безопасности
-            messagebox.showerror("Access Denied", str(pe))
-        except Exception as e:
-            messagebox.showerror("Error", f"An error occurred: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-    def on_save(self):
-        """Callback called after successful save"""
-        if hasattr(self, 'callback') and self.callback:
-            self.callback()
-        
-    def delete(self):
-        """Удаляет профиль"""
-        # Безопасность: проверяем права удаления
-        if not self._check_security('delete_profile'):
-            return
-        
-        if not self.profile:
-            return
-        
-        # Подсчитываем инструменты
-        try:
-            tools_count = self.profile_service.count_tools(self.profile.id)
-        except:
-            tools_count = 0
-        
-        # Формируем сообщение
-        message = f"Delete profile '{self.profile.name}'?"
-        if tools_count > 0:
-            message += f"\n\n⚠️ WARNING: {tools_count} tool(s) will also be deleted!"
-            message += "\n\nAll tools assigned to this profile will be permanently deleted."
-        
-        # TODO: Использовать SecurityManager для критических операций
-        # Пример:
-        # if not self._confirm_critical_operation("Confirm Delete", message):
-        #     return
-        
-        if ask_yesno(self.window, "Confirm Delete", message):
-            try:
-                # TODO: Логирование перед удалением
-                # self._log_security_action('delete_profile_attempt',
-                #                          f'Попытка удаления профиля: {self.profile.name} (ID: {self.profile.id})',
-                #                          severity='HIGH')
-                
-                success = self.profile_service.delete_profile(self.profile.id)
-                
-                if success:
-                    # TODO: Логирование успешного удаления
-                    # self._log_security_action('delete_profile_success',
-                    #                          f'Профиль успешно удален: {self.profile.name}',
-                    #                          severity='HIGH')
-                    
-                    show_info(self.window, "Success", "Profile deleted successfully")
-                    self.window.destroy()
-                    if self.callback:
-                        self.callback()
-                else:
-                    show_error(self.window, "Error", "Failed to delete profile")
-                    
-            except Exception as e:
-                show_error(self.window, "Error", f"Delete failed: {e}")
-    
     def _apply_access_mode(self):
         """Применяет режим доступа (READ ONLY или FULL ACCESS) к виджетам"""
-        # Всегда проверяем актуальное состояние
         try:
             from config.security import is_read_only
             current_read_only = is_read_only()
-            print(f"DEBUG: Current security mode: {'read_only' if current_read_only else 'full_access'}")
         except Exception as e:
             print(f"DEBUG: Error getting security mode: {e}")
-            current_read_only = False  # По умолчанию FULL ACCESS
+            current_read_only = False
         
-        # Определяем режим доступа
         if current_read_only:
             access_mode = "READ_ONLY"
         else:
             access_mode = "FULL_ACCESS"
         
-        # Дополнительная проверка: если профиль заблокирован
         if self.profile and hasattr(self.profile, 'locked') and self.profile.locked:
             access_mode = "READ_ONLY"
         
         print(f"DEBUG: Applying access mode: {access_mode}")
         
-        # Применяем режим
         if access_mode == "READ_ONLY":
             state = "disabled"
             bg_color = "#f0f0f0"
             readonly_text = " (READ ONLY)"
             
-            # Обновляем заголовок окна
             if hasattr(self, 'window') and self.window.winfo_exists():
                 current_title = self.window.title()
                 if "(READ ONLY)" not in current_title:
@@ -682,158 +1063,81 @@ class ProfileEditor:
         else:
             state = "normal"
             bg_color = "white"
-    
-    # ... остальная часть метода без изменений ...
         
         # Применяем состояние ко всем редактируемым виджетам
-        widgets = [
-            self.name_entry,
-            self.desc_text,
-            self.feed_entry,
-            self.material_entry,
-            self.product_entry,
-            self.upload_btn,
-            self.remove_btn
-        ]
+        # Проверяем каждый виджет перед доступом к нему
+        widgets_to_update = []
         
-        # Добавляем кнопки если они есть
-        if hasattr(self, 'save_btn'):
-            widgets.append(self.save_btn)
-        if hasattr(self, 'delete_btn'):
-            widgets.append(self.delete_btn)
-        if hasattr(self, 'cancel_btn'):
-            widgets.append(self.cancel_btn)
+        # Собираем только существующие виджеты
+        if hasattr(self, 'name_entry') and self.name_entry:
+            widgets_to_update.append(self.name_entry)
+        if hasattr(self, 'desc_text') and self.desc_text:
+            widgets_to_update.append(self.desc_text)
+        if hasattr(self, 'feed_entry') and self.feed_entry:
+            widgets_to_update.append(self.feed_entry)
+        if hasattr(self, 'upload_btn') and self.upload_btn:
+            widgets_to_update.append(self.upload_btn)
+        if hasattr(self, 'remove_btn') and self.remove_btn:
+            widgets_to_update.append(self.remove_btn)
+        if hasattr(self, 'material_combo') and self.material_combo:
+            widgets_to_update.append(self.material_combo)
+        if hasattr(self, 'save_btn') and self.save_btn:
+            widgets_to_update.append(self.save_btn)
+        if hasattr(self, 'delete_btn') and self.delete_btn:
+            widgets_to_update.append(self.delete_btn)
+        if hasattr(self, 'cancel_btn') and self.cancel_btn:
+            widgets_to_update.append(self.cancel_btn)
         
-        for widget in widgets:
-            if widget:
-                try:
-                    widget.configure(state=state)
-                    # Для виджетов с background
-                    if hasattr(widget, 'configure') and 'background' in widget.configure():
-                        widget.configure(background=bg_color)
-                except Exception as e:
-                    print(f"DEBUG: Error setting widget state: {e}")  # Debug print
+        for widget in widgets_to_update:
+            try:
+                widget.configure(state=state)
+            except Exception as e:
+                print(f"DEBUG: Error configuring widget {widget}: {e}")
         
-        # Для Text виджета устанавливаем состояние отдельно
-        if self.desc_text:
+        if hasattr(self, 'desc_text') and self.desc_text:
             try:
                 self.desc_text.configure(state=state)
                 if state == "normal":
                     self.desc_text.configure(bg="white")
                 else:
                     self.desc_text.configure(bg="#f0f0f0")
-            except Exception as e:
-                print(f"DEBUG: Error setting desc_text: {e}")
+            except:
+                pass
         
-        # Сохраняем режим доступа
         self.access_mode = access_mode
         logger.info(f"Access mode applied: {access_mode}")
     
-    # ========== МЕТОДЫ БЕЗОПАСНОСТИ ==========
-    
     def _check_security(self, action: str) -> bool:
-        """
-        Проверка прав доступа с динамической проверкой режима
-        """
-        # ВСЕГДА проверяем актуальный режим
+        """Проверка прав доступа"""
         try:
             from config.security import is_read_only
             if is_read_only():
-                logger.warning(f"Action denied in READ ONLY mode: {action}")
-                
-                # Показываем информативное сообщение
                 messagebox.showwarning(
                     "Read Only Mode",
-                    f"Action '{action}' is not available in Read Only mode.\n\n"
-                    f"Please switch to Full Access mode:\n"
-                    f"1. Press Ctrl+Shift+F in main window\n"
-                    f"2. Then retry this operation"
+                    f"Action '{action}' is not available in Read Only mode."
                 )
                 return False
-        except Exception as e:
-            print(f"DEBUG: Error checking security: {e}")
-            # В случае ошибки разрешаем операцию
+        except:
+            pass
         
         return True
     
     def _on_security_mode_changed(self, is_read_only: bool):
         """Callback при изменении режима безопасности"""
-        print(f"DEBUG: Security mode changed to: {'READ_ONLY' if is_read_only else 'FULL_ACCESS'}")
-        # Обновляем UI с небольшой задержкой
         if hasattr(self, 'window') and self.window.winfo_exists():
             self.window.after(100, self._apply_access_mode)
     
-    def _confirm_critical_operation(self, title: str, message: str) -> bool:
-        """
-        Подтверждение критических операций
-        
-        Args:
-            title: Заголовок окна подтверждения
-            message: Сообщение для подтверждения
-        
-        Returns:
-            bool: True если подтверждено, False если отменено
-        """
-        # TODO: Использовать SecurityManager.confirm_critical_operation()
-        # Пример:
-        # try:
-        #     from config.security import SecurityManager
-        #     security_manager = SecurityManager()
-        #     return security_manager.confirm_critical_operation(title, message)
-        # except ImportError:
-        #     pass
-        
-        # Fallback на стандартное подтверждение
-        return ask_yesno(self.window, title, message)
-    
-    def _log_security_action(self, action: str, details: str, severity: str = 'LOW'):
-        """
-        Логирование действий безопасности
-        
-        Args:
-            action: Тип действия
-            details: Подробности действия
-            severity: Уровень серьезности ('LOW', 'MEDIUM', 'HIGH')
-        """
-        # TODO: Реализовать через SecurityManager.log_activity()
-        # Пример:
-        # try:
-        #     from config.security import SecurityManager
-        #     security_manager = SecurityManager()
-        #     if hasattr(self, 'current_user'):
-        #         security_manager.log_activity(
-        #             user=self.current_user,
-        #             action=action,
-        #             details=details,
-        #             severity=severity
-        #         )
-        # except ImportError:
-        #     pass
-        
-        # Временное логирование в консоль
-        logger.info(f"Security action: {action} - {details} [{severity}]")
-    
-    def _scan_file_for_security(self, filepath: str) -> bool:
-        """
-        Проверка файла на безопасность
-        
-        Args:
-            filepath: Путь к файлу
-        
-        Returns:
-            bool: True если файл безопасен, False если содержит угрозы
-        """
-        # TODO: Реализовать через SecurityManager.scan_file()
-        # Пример:
-        # try:
-        #     from config.security import SecurityManager
-        #     security_manager = SecurityManager()
-        #     return security_manager.scan_file(filepath)
-        # except ImportError:
-        #     pass
-        
-        # По умолчанию считаем файл безопасным
-        return True
+    def _safe_save(self):
+        """Защищенный вызов save"""
+        if self._saving:
+            return
+        self.save_btn.config(state='disabled')
+        try:
+            self.save()
+        except Exception as e:
+            print(f"Error in save: {e}")
+            self.save_btn.config(state='normal')
+            self._saving = False
 
 
 # Экспорт класса

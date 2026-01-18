@@ -4,8 +4,9 @@
 import os
 import shutil
 import logging
+import hashlib
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import tempfile
 
 logger = logging.getLogger(__name__)
@@ -37,43 +38,153 @@ class PDFManager:
         logger.info(f"PDF manager initialized. Folder: {self.pdf_folder}")
     
     def save_profile_pdf(self, profile_id: int, pdf_data: bytes, 
-                         original_filename: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+                         original_filename: Optional[str] = None,
+                         overwrite_existing: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Сохраняет PDF файл профиля
         
         Args:
             profile_id: ID профиля
             pdf_data: Данные PDF файла
-            original_filename: Оригинальное имя файла (для информации)
+            original_filename: Оригинальное имя файла
+            overwrite_existing: Если True, перезаписывает существующий файл вместо создания нового
             
         Returns:
             Tuple[bool, Optional[str]]: (успех, путь к файлу)
         """
         try:
-            # Генерируем имя файла
+            logger.info(f"=== SAVE PDF START ===")
+            logger.info(f"Profile ID: {profile_id}")
+            logger.info(f"PDF data size: {len(pdf_data) if pdf_data else 'None'} bytes")
+            logger.info(f"Original filename: {original_filename}")
+            logger.info(f"Overwrite existing: {overwrite_existing}")
+            
+            # Проверка PDF данных
+            if not pdf_data:
+                logger.error("PDF data is empty or None!")
+                return False, None
+            
+            if len(pdf_data) < 100:
+                logger.warning(f"PDF data very small ({len(pdf_data)} bytes). Might be corrupted.")
+            
+            # Создаем папку если ее нет
+            self.pdf_folder.mkdir(parents=True, exist_ok=True)
+            
+            # ПОИСК СУЩЕСТВУЮЩИХ PDF ФАЙЛОВ
+            existing_files = self._find_profile_pdfs(profile_id)
+            logger.info(f"Found {len(existing_files)} existing PDF files for profile {profile_id}")
+            
+            # Определяем имя файла
             if original_filename:
-                # Безопасное имя файла
                 safe_name = self._make_filename_safe(original_filename)
-                filename = f"profile_{profile_id:04d}_{safe_name}"
+                target_filename = f"profile_{profile_id:04d}_{safe_name}"
             else:
-                filename = f"profile_{profile_id:04d}"
+                # Если имя файла не указано, используем первое существующее имя или генерируем новое
+                if existing_files and overwrite_existing:
+                    # Используем имя первого существующего файла
+                    target_filename = existing_files[0].name
+                    logger.info(f"Reusing existing filename: {target_filename}")
+                else:
+                    target_filename = f"profile_{profile_id:04d}.pdf"
             
             # Добавляем расширение если его нет
-            if not filename.lower().endswith('.pdf'):
-                filename += '.pdf'
+            if not target_filename.lower().endswith('.pdf'):
+                target_filename += '.pdf'
             
-            filepath = self.pdf_folder / filename
+            filepath = self.pdf_folder / target_filename
+            
+            # ПРОВЕРКА, НУЖНО ЛИ СОХРАНЯТЬ ФАЙЛ
+            if existing_files and overwrite_existing:
+                # Проверяем, существует ли уже файл с таким именем
+                if filepath.exists():
+                    # Сравниваем хэши
+                    existing_hash = self._get_file_hash(filepath)
+                    new_hash = hashlib.md5(pdf_data).hexdigest()[:8]
+                    
+                    if existing_hash == new_hash:
+                        logger.info(f"PDF unchanged (hash: {new_hash}), skipping file write")
+                        logger.info(f"=== SAVE PDF SKIPPED (unchanged) ===")
+                        return True, str(filepath)
+                    else:
+                        logger.info(f"PDF changed (existing hash: {existing_hash}, new hash: {new_hash}), overwriting")
+                
+                # УДАЛЯЕМ ВСЕ СТАРЫЕ PDF ФАЙЛЫ ДЛЯ ЭТОГО ПРОФИЛЯ
+                self._delete_old_profile_pdfs(profile_id, keep_file=str(filepath))
             
             # Сохраняем файл
-            with open(filepath, 'wb') as f:
-                f.write(pdf_data)
+            logger.info(f"Writing {len(pdf_data)} bytes to {filepath}")
             
-            logger.info(f"PDF сохранен: {filepath.name} (размер: {len(pdf_data)} байт)")
-            return True, str(filepath)
+            try:
+                with open(filepath, 'wb') as f:
+                    f.write(pdf_data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                # Проверяем сохранение
+                if filepath.exists():
+                    file_size = filepath.stat().st_size
+                    if file_size == len(pdf_data):
+                        logger.info(f"✓ PDF успешно сохранен: {filepath.name} ({file_size} bytes)")
+                        logger.info(f"=== SAVE PDF SUCCESS ===")
+                        return True, str(filepath)
+                    else:
+                        logger.error(f"✗ File size mismatch: expected {len(pdf_data)}, got {file_size}")
+                        return False, None
+                else:
+                    logger.error("✗ File was not created")
+                    return False, None
+                    
+            except Exception as e:
+                logger.error(f"Error writing file: {e}")
+                return False, None
+                
+        except Exception as e:
+            logger.error(f"Ошибка сохранения PDF для профиля {profile_id}: {e}", exc_info=True)
+            logger.info(f"=== SAVE PDF ERROR ===")
+            return False, None
+    
+    def _find_profile_pdfs(self, profile_id: int) -> List[Path]:
+        """Находит все PDF файлы для профиля"""
+        try:
+            pattern = f"profile_{profile_id:04d}*"
+            pdf_files = []
+            
+            for file_path in self.pdf_folder.glob(pattern):
+                if file_path.suffix.lower() == '.pdf' and file_path.is_file():
+                    pdf_files.append(file_path)
+            
+            return sorted(pdf_files)  # Сортируем для консистентности
             
         except Exception as e:
-            logger.error(f"Ошибка сохранения PDF для профиля {profile_id}: {e}")
-            return False, None
+            logger.error(f"Error finding PDFs for profile {profile_id}: {e}")
+            return []
+    
+    def _get_file_hash(self, filepath: Path) -> str:
+        """Вычисляет хэш файла"""
+        try:
+            with open(filepath, 'rb') as f:
+                file_data = f.read()
+            return hashlib.md5(file_data).hexdigest()[:8]  # Первые 8 символов для краткости
+        except:
+            return ""
+    
+    def _delete_old_profile_pdfs(self, profile_id: int, keep_file: str = None) -> None:
+        """Удаляет старые PDF файлы профиля, оставляя только указанный"""
+        try:
+            existing_files = self._find_profile_pdfs(profile_id)
+            
+            for file_path in existing_files:
+                if keep_file and str(file_path) == keep_file:
+                    continue  # Пропускаем файл, который нужно сохранить
+                
+                try:
+                    file_path.unlink()
+                    logger.info(f"Deleted old PDF: {file_path.name}")
+                except Exception as e:
+                    logger.warning(f"Could not delete old PDF {file_path.name}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error deleting old PDFs: {e}")
     
     def load_profile_pdf(self, profile_id: int, pdf_path: Optional[str] = None) -> Optional[bytes]:
         """

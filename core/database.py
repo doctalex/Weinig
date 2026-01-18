@@ -224,16 +224,16 @@ class DatabaseManager:
     
     def add_profile(self, name: str, description: str = '', feed_rate: float = 2.5,
                    material_size: str = '100x100', product_size: str = '90x90',
-                   image_data: Optional[bytes] = None) -> int:
+                   image_data: Optional[bytes] = None, pdf_path: Optional[str] = None) -> int:
         """Добавляет новый профиль"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO Profiles 
-                    (Name, Description, Feed_rate, Material_size, Product_size, Image)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (name, description, feed_rate, material_size, product_size, image_data))
+                    (Name, Description, Feed_rate, Material_size, Product_size, Image, pdf_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (name, description, feed_rate, material_size, product_size, image_data, pdf_path))
                 conn.commit()
                 return cursor.lastrowid
         except sqlite3.IntegrityError as e:

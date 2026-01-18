@@ -114,6 +114,24 @@ class ProfileService(Observable):
         """Sets the current profile"""
         self.current_profile_id = profile_id
         self.notify_observers('current_profile_changed', profile_id)
+        
+    def set_material_for_profile(self, profile_id: int, material_id: int) -> bool:
+        """Назначает материал профилю"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "UPDATE profiles SET material_size_id = ? WHERE id = ?",
+                (material_id, profile_id)
+            )
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"DEBUG: Error setting material for profile: {e}")
+            return False
     
     # === МЕТОДЫ РЕДАКТИРОВАНИЯ С ПОДДЕРЖКОЙ PDF ===
     

@@ -202,69 +202,57 @@ class WeinigHydromatManager:
         if not self.current_profile_id:
             self.clear_display()
             return
-        
+
         # Получаем текущий профиль
         profile = self.profile_service.get_current_profile()
         if not profile:
             self.clear_display()
             return
-        
-        # Обновляем переменные
+
+        # Обновляем переменные интерфейса
         self.current_profile_var.set(f"Current: {profile.name}")
         self.profile_name_var.set(profile.name)
         self.profile_desc_var.set(profile.description or "No description")
         self.feed_rate_var.set(f"{profile.feed_rate} m/min" if profile.feed_rate else "")
         self.material_size_var.set(profile.material_size or "Not specified")
-        
-        # ВАЖНО: Получаем актуальный product_size
-        # Сначала пытаемся получить из самого профиля
-        product_size = getattr(profile, 'product_size', '')
-        
-        # Если в профиле пусто, пытаемся получить из вариантов размеров
-        if not product_size:
-            try:
-                from services.size_service import SizeService
-                size_service = SizeService()
-                variants = size_service.get_product_variants_for_profile(profile.id)
-                
-                if variants:
-                    # Находим default вариант или берем первый
-                    default_variant = None
-                    for variant in variants:
-                        if variant.get('is_default'):
-                            default_variant = variant
-                            break
-                    
-                    if not default_variant and variants:
-                        default_variant = variants[0]
-                    
-                    if default_variant:
-                        thickness = default_variant.get('thickness')
-                        if thickness:
-                            product_size = f"{default_variant['width']} x {thickness}"
-                        else:
-                            product_size = f"{default_variant['width']}"
-                        
-                        # Обновляем профиль в БД для будущих загрузок
-                        self.profile_service.update_profile_product_size(
-                            profile.id, product_size
-                        )
-                    else:
-                        product_size = "Not specified"
-                else:
-                    product_size = "Not specified"
-            except Exception as e:
-                print(f"DEBUG: Error loading product size: {e}")
-                product_size = "Not specified"
-        
+
+        # Получаем актуальный product_size
+        product_size = getattr(profile, 'product_size', '') or self._get_default_product_size(profile.id)
         self.product_size_var.set(product_size)
-        
+
         # Загружаем превью PDF (первая страница)
         self._load_profile_preview(profile.get_preview())
-        
+
         # Загружаем инструменты
         self.load_profile_tools()
-    
+
+    def _get_default_product_size(self, profile_id: int) -> str:
+        """Возвращает строку 'width x thickness' для default product variant"""
+        try:
+            variants = self.size_service.get_product_variants_for_profile(profile_id)
+            if not variants:
+                return "Not specified"
+
+            # Ищем default вариант
+            default_variant = next((v for v in variants if v.get('is_default')), variants[0])
+
+            width = default_variant.get('width')
+            thickness = default_variant.get('thickness')
+            if width is None:
+                return "Not specified"
+
+            product_size = f"{width}"
+            if thickness:
+                product_size += f" x {thickness}"
+
+            # Сохраняем в профиле для будущих загрузок
+            self.profile_service.update_profile_product_size(profile_id, product_size)
+
+            return product_size
+        except Exception as e:
+            print(f"DEBUG: Error loading product size: {e}")
+            return "Not specified"
+  
     def _on_tool_created(self, tool_id: int, tool_code: str):
         """Обработка создания инструмента"""
         logger.info(f"Tool created: {tool_id} ({tool_code})")
@@ -1376,7 +1364,7 @@ class WeinigHydromatManager:
             return
         
         ProfileEditor(
-            self.root,
+            self,
             self.profile_service,
             callback=self.load_profiles
         )
@@ -1386,23 +1374,35 @@ class WeinigHydromatManager:
         if not self.current_profile_id:
             show_warning(self.root, "Warning", "Please select a profile to edit")
             return
-        
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+
+        # Проверка режима доступа
         if self.security.is_read_only():
-            show_warning(self.root, "Access Denied", 
-                        "Cannot edit profiles in Read Only mode.\n\n"
-                        "Press Ctrl+Shift+F to switch to Full Access mode.")
-            return
-        
-        profile = self.profile_service.get_current_profile()
-        if profile:
-            ProfileEditor(
+            show_warning(
                 self.root,
-                self.profile_service,
-                profile=profile,
-                callback=self.load_profiles
+                "Access Denied", 
+                "Cannot edit profiles in Read Only mode.\n\n"
+                "Press Ctrl+Shift+F to switch to Full Access mode."
             )
-    
+            return
+
+        # Получаем профиль
+        profile = self.profile_service.get_current_profile()
+        if not profile:
+            show_warning(self.root, "Error", "Failed to load selected profile")
+            return
+
+        # Создаём объект SizeService один раз
+        from services.size_service import SizeService
+        size_service = SizeService()
+
+        # Открываем редактор профиля
+        ProfileEditor(
+            parent=self.root,
+            profile_service=self.profile_service,
+            size_service=size_service,
+            profile=profile
+        )
+ 
     def delete_profile(self):
         """Удаляет выбранный профиль"""
         if not self.current_profile_id:

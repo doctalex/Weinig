@@ -11,6 +11,7 @@ from typing import Optional
 from pathlib import Path
 from datetime import datetime
 
+from services.size_service import MaterialSize
 from core.models import Profile
 from services.profile_service import ProfileService
 from gui.base.dialogs import show_error, show_info, ask_yesno
@@ -24,14 +25,15 @@ logger = logging.getLogger(__name__)
 class ProfileEditor:
     """Окно редактирования профиля с поддержкой PDF"""
     
-    def __init__(self, parent, profile_service: ProfileService, 
-                profile: Optional[Profile] = None, callback=None):
-        print("ProfileEditor initialized")
+    def __init__(self, parent, profile_service, size_service, profile=None, callback=None):
         self.parent = parent
         self.profile_service = profile_service
+        self.size_service = size_service
         self.profile = profile
         self.callback = callback
-        self.size_service = SizeService()
+        self._saving = False
+
+        print("ProfileEditor initialized")
         
         # ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ ДЛЯ ВИДЖЕТОВ
         self.save_btn = None
@@ -314,43 +316,6 @@ class ProfileEditor:
             self.window.destroy()
         except:
             pass
-
-    def _open_material_sizes_dialog(self):
-        """Временная заглушка для диалога размеров материала"""
-        messagebox.showinfo("Info", "Material sizes management will be available in the next version")
-        # TODO: Реализовать MaterialSizesDialog
-    
-    def _refresh_material_sizes(self):
-        """Обновить список размеров материала в комбобоксе"""
-        material_sizes = self.size_service.get_all_material_sizes()
-        size_names = [s.display_name() for s in material_sizes]
-        size_names.insert(0, "")
-        
-        current_value = self.material_size_var.get()
-        self.material_combo['values'] = size_names
-        
-        if current_value in size_names:
-            self.material_size_var.set(current_value)
-    
-    def _parse_material_size(self, text: str):
-        """
-        Принимает строку '140 x 27'
-        Возвращает (width, thickness) или None
-        """
-        try:
-            parts = text.lower().replace("×", "x").split("x")
-            if len(parts) != 2:
-                return None
-
-            width = float(parts[0].strip())
-            thickness = float(parts[1].strip())
-
-            if width <= 0 or thickness <= 0:
-                return None
-
-            return width, thickness
-        except:
-            return None
     
     def _add_product_variant(self):
         """Упрощенный диалог добавления варианта"""
@@ -508,18 +473,6 @@ class ProfileEditor:
         # 3. Обновляем таблицу
         self._update_product_variants_table()
             
-    def _get_selected_material_size(self):
-        """Получить выбранный объект MaterialSize"""
-        selected_name = self.material_size_var.get()
-        if not selected_name:
-            return None
-        
-        material_sizes = self.size_service.get_all_material_sizes()
-        for size in material_sizes:
-            if size.display_name() == selected_name:
-                return size
-        return None
-    
     def _load_profile_data(self):
         """Загружает данные профиля в форму"""
         if not self.profile:
@@ -664,30 +617,23 @@ class ProfileEditor:
             self.pdf_was_uploaded = False
     
     def save(self):
-        """Сохраняет профиль с PDF"""
+        """Сохраняет профиль с PDF и выбранным размером материала"""
         if self._saving:
             return
         self._saving = True
-        
+
         try:
-            # ПРОВЕРКА РЕЖИМА ДОСТУПА
+            # Проверка режима доступа
             if hasattr(self, 'access_mode') and self.access_mode == "READ_ONLY":
                 messagebox.showerror(
-                    "Access Denied", 
-                    "This profile is in READ ONLY mode.\n"
-                    "You cannot modify it. Contact an administrator."
+                    "Access Denied",
+                    "This profile is in READ ONLY mode.\nYou cannot modify it."
                 )
                 self._saving = False
                 self.save_btn.config(state='normal')
                 return
-            
-            # Безопасность: проверяем права сохранения
-            if not self._check_security('create_profile' if not self.is_editing else 'edit_profile'):
-                self._saving = False
-                self.save_btn.config(state='normal')
-                return
-            
-            # Валидация данных
+
+            # Валидация имени профиля
             name = self.name_var.get().strip()
             if not name:
                 messagebox.showerror("Error", "Profile name is required")
@@ -695,30 +641,19 @@ class ProfileEditor:
                 self.save_btn.config(state='normal')
                 return
 
+            # Описание и скорость подачи
             description = self.desc_text.get("1.0", tk.END).strip()
-            
             try:
                 feed_rate = float(self.feed_var.get())
             except ValueError:
                 feed_rate = 30.0
-            
-            material_text = self.material_size_var.get().strip()
 
-            material_parsed = self._parse_material_size(material_text)
-            if material_text and not material_parsed:
-                messagebox.showerror(
-                    "Error",
-                    "Material size must be in format: WIDTH x THICKNESS\nExample: 140 x 27"
-                )
-                self._saving = False
-                self.save_btn.config(state='normal')
-                return
+            # 🔹 Получаем выбранный размер материала
+            selected_material = self._get_selected_material()
+            material_size_id = selected_material.id if selected_material else None
+            material_size_str = selected_material.display_name() if selected_material else ""
 
-            
-            # Определяем какие PDF данные передавать
-            pdf_data_to_save = None
-            pdf_filename_to_save = None
-            
+            # 🔹 Определяем PDF данные для сохранения
             if not self.is_editing:
                 pdf_data_to_save = self.pdf_data
                 pdf_filename_to_save = self.pdf_filename
@@ -730,129 +665,83 @@ class ProfileEditor:
                     pdf_data_to_save = None
                     pdf_filename_to_save = None
                 else:
-                    if self.original_pdf_data:
-                        pdf_data_to_save = self.original_pdf_data
-                        pdf_filename_to_save = None
-                    else:
-                        pdf_data_to_save = None
-                        pdf_filename_to_save = None
+                    pdf_data_to_save = self.original_pdf_data
+                    pdf_filename_to_save = None
 
-            # Получаем выбранный объект MaterialSize
-            selected_material_size = self._get_selected_material_size()
-            material_size_str = selected_material_size.display_name() if selected_material_size else ""
-            
-            # Логирование
-            from utils.logger import log_profile_change
-            log_profile_change({
-                'name': name,
-                'feed_rate': feed_rate,
-                'material_size': material_size_str,
-                'product_size': "",
-                'tools': []
-            })
-
-            profile_id = None
-            action = ""
+            # 🔹 Сохраняем профиль
             success = False
-            
+            action = ""
+            profile_id = None
+
             if self.is_editing and self.profile:
-                # Update existing profile
+                # Обновление существующего профиля
                 profile_id = self.profile.id
                 success = self.profile_service.update_profile(
-                    self.profile.id,
+                    profile_id,
                     name=name,
                     description=description,
                     feed_rate=feed_rate,
-                    material_size=material_size_str,
-                    product_size="",  # оставляем пустым - обновим отдельно
+                    material_size=material_size_str,    # только строка
                     pdf_data=pdf_data_to_save,
                     pdf_filename=pdf_filename_to_save
                 )
                 action = "updated"
             else:
-                # Create new profile
+                # Создание нового профиля
                 profile_id = self.profile_service.create_profile(
                     name=name,
                     description=description,
                     feed_rate=feed_rate,
+                    material_size_id=material_size_id,
                     material_size=material_size_str,
-                    product_size="",  # оставляем пустым - обновим отдельно
                     pdf_data=pdf_data_to_save,
                     pdf_filename=pdf_filename_to_save
                 )
                 success = profile_id is not None
                 action = "created"
-                profile_id = profile_id
 
-            # ВАЖНО: Сохраняем варианты размеров продукта и обновляем product_size
-            if success and profile_id:
-                print(f"DEBUG: Saving {len(self.product_variants)} product variants for profile {profile_id}")
-                
-                # Формируем строку product_size для отображения в главном окне
-                product_size_str = self._get_product_size_string()
-                print(f"DEBUG: Product size string: '{product_size_str}'")
-                
-                # Обновляем поле product_size в профиле
-                update_success = self.profile_service.update_profile_product_size(
-                    profile_id, product_size_str
-                )
-                print(f"DEBUG: Updated profile product_size: {update_success}")
-                
-                # Сохраняем все варианты в базу данных
-                self._save_product_variants(profile_id)
-                
-                # Получаем обновленный профиль для callback
-                updated_profile = self.profile_service.get_profile_by_id(profile_id)
-                if updated_profile and hasattr(updated_profile, 'product_size'):
-                    print(f"DEBUG: Profile updated with product_size: {updated_profile.product_size}")
-
-            # Уведомление о результате
             if success:
+                # 🔹 Сохраняем варианты размеров продукта (если есть)
+                if profile_id and hasattr(self, 'product_variants'):
+                    self._save_product_variants(profile_id)
+                    product_size_str = self._get_product_size_string()
+                    self.profile_service.update_profile_product_size(profile_id, product_size_str)
+
                 messagebox.showinfo("Success", f"Profile {action} successfully")
-                
-                # ПОЛНОЕ ОБНОВЛЕНИЕ ГЛАВНОГО ОКНА
-                print(f"DEBUG: Calling update functions for main window")
-                
-                # 1. Прямое обновление через родительское окно
+
+                # 🔹 Обновляем главное окно
                 try:
                     if hasattr(self.parent, 'show_profile_details'):
-                        print(f"DEBUG: Calling parent.show_profile_details()")
                         self.parent.show_profile_details()
                     if hasattr(self.parent, 'load_profiles'):
-                        print(f"DEBUG: Calling parent.load_profiles()")
                         self.parent.load_profiles()
                     if hasattr(self.parent, 'load_profile_tools'):
-                        print(f"DEBUG: Calling parent.load_profile_tools()")
                         self.parent.load_profile_tools()
                 except Exception as e:
                     print(f"DEBUG: Error updating parent directly: {e}")
-                
-                # 2. Внешний callback
+
                 if hasattr(self, 'callback') and self.callback:
-                    print(f"DEBUG: Calling external callback")
                     try:
                         self.callback()
                     except Exception as e:
                         print(f"DEBUG: Callback error: {e}")
-                
-                # Сброс флагов
+
+                # Сброс флагов PDF
                 self.pdf_was_uploaded = False
                 self.pdf_was_removed = False
-                
-                # Закрытие окна
+
+                # Закрываем окно
                 self.window.destroy()
-                
+
             else:
                 messagebox.showerror("Error", f"Failed to {action} profile")
-                self._saving = False
-                if hasattr(self, 'save_btn'):
-                    self.save_btn.config(state='normal')
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
-            print(f"DEBUG: Save error details: {e}")
             import traceback
             traceback.print_exc()
+
+        finally:
             self._saving = False
             if hasattr(self, 'save_btn'):
                 self.save_btn.config(state='normal')
@@ -1138,7 +1027,40 @@ class ProfileEditor:
             print(f"Error in save: {e}")
             self.save_btn.config(state='normal')
             self._saving = False
+            
+    def _init_material_dropdown(self):
+        """Инициализация выпадающего списка материалов"""
+        self.material_size_var = tk.StringVar()
+        self.material_combo = ttk.Combobox(self, textvariable=self.material_size_var, state="readonly")
+        self.material_combo.grid(row=..., column=..., sticky="w")  # вставьте правильные координаты
 
+        # Загружаем варианты из SizeService
+        self._load_material_sizes()
 
+    def _load_material_sizes(self):
+        """Загрузить доступные размеры материала в Combobox"""
+        material_sizes = self.size_service.get_all_material_sizes()
+        size_names = [s.display_name() for s in material_sizes]
+        self.material_combo['values'] = size_names
+
+        # Если у профиля уже есть материал, выставляем его
+        if hasattr(self, 'profile') and self.profile.material_size_id:
+            current_material = self.size_service.get_material_size_by_id(self.profile.material_size_id)
+            if current_material:
+                self.material_size_var.set(current_material.display_name())
+
+    def _get_selected_material(self) -> Optional[MaterialSize]:
+        """Возвращает объект MaterialSize выбранного значения или None"""
+        selected_name = self.material_size_var.get()
+        if not selected_name:
+            return None
+
+        # Проходим по всем материалам из сервиса
+        for size in self.size_service.get_all_material_sizes():
+            if size.display_name() == selected_name:
+                return size
+
+        return None
+       
 # Экспорт класса
 __all__ = ['ProfileEditor']

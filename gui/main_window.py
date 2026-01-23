@@ -40,6 +40,8 @@ class WeinigHydromatManager:
         self.db = DatabaseManager()
         self.profile_service = ProfileService(self.db)
         self.tool_service = ToolService(self.db)
+        from services.size_service import SizeService
+        self.size_service = SizeService()
         
         # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
         from config.security import get_security_manager
@@ -1378,7 +1380,8 @@ class WeinigHydromatManager:
         ProfileEditor(
             self.root,
             self.profile_service,
-            callback=self.load_profiles
+            callback=self.load_profiles,
+            size_service=self.size_service  # ← ДОБАВЬТЕ ЭТО
         )
     
     def edit_profile(self):
@@ -1397,11 +1400,12 @@ class WeinigHydromatManager:
         profile = self.profile_service.get_current_profile()
         if profile:
             ProfileEditor(
-                self.root,
-                self.profile_service,
-                profile=profile,
-                callback=self.load_profiles
-            )
+            self.root,
+            self.profile_service,
+            profile=profile,
+            callback=self.load_profiles,
+            size_service=self.size_service  # ← ДОБАВЬТЕ ЭТО
+        )
     
     def delete_profile(self):
         """Удаляет выбранный профиль"""

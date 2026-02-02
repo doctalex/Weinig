@@ -287,29 +287,3 @@ class SizeService:
         except Exception as e:
             print(f"DEBUG: Error setting active variant: {e}")
             return False
-            
-    def get_suitable_material_sizes(self, min_width: float, min_thickness: float) -> List[MaterialSize]:
-        """
-        Получить доски, подходящие для профиля.
-        Доска подходит если: width >= min_width AND thickness >= min_thickness
-        Сортировка по минимальному перерасходу материала.
-        """
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, width, thickness, name 
-                FROM material_sizes
-                WHERE width >= ? AND thickness >= ?
-                ORDER BY (width - ?) + (thickness - ?)
-            ''', (min_width, min_thickness, min_width, min_thickness))
-            
-            sizes = [MaterialSize(id=row[0], width=row[1], thickness=row[2], name=row[3])
-                     for row in cursor.fetchall()]
-            conn.close()
-            
-            print(f"DEBUG: Found {len(sizes)} suitable boards for {min_width}x{min_thickness}mm")
-            return sizes
-        except Exception as e:
-            print(f"DEBUG: Error getting suitable material sizes: {e}")
-            return []

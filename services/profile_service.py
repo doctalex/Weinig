@@ -254,9 +254,9 @@ class ProfileService(Observable):
         return filename
     
     def update_profile(self, profile_id: int, name: str = None, description: str = None, 
-                      feed_rate: float = None, material_size: str = None,
-                      product_size: str = None, pdf_data: bytes = None,
-                      pdf_filename: str = None, keep_existing_pdf: bool = False) -> bool:
+                       feed_rate: float = None, material_size: str = None,
+                       product_size: str = None, pdf_data: bytes = None,
+                       pdf_filename: str = None, keep_existing_pdf: bool = False) -> bool:
         """Updates a profile with PDF support
         
         Args:
@@ -312,7 +312,6 @@ class ProfileService(Observable):
                 
                 # Если передали None для pdf_data, значит удаляем PDF
                 elif pdf_data is None and pdf_filename is None:
-                    # Это сигнал, что нужно удалить PDF
                     if current_profile.pdf_path:
                         self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
                         update_data['image_data'] = None
@@ -327,6 +326,7 @@ class ProfileService(Observable):
             success = self.db.update_profile(profile_id, **update_data)
             
             if success:
+                # ВАЖНО: уведомляем наблюдателей
                 self.notify_observers('profile_updated', profile_id)
                 logger.info(f"Profile updated successfully: {profile_id}")
             

@@ -5,6 +5,7 @@ import os
 import tkinter as tk
 from tkinter import ttk
 import logging
+from tkinter import messagebox
 from typing import Optional, Dict
 from utils.logger import ToolLogEntry
 from PIL import Image
@@ -27,7 +28,8 @@ logger = logging.getLogger(__name__)
 class WeinigHydromatManager:
     """Главное окно управления инструментами"""
     
-    def __init__(self, root):
+    def __init__(self, root, db_manager):
+        self.db_manager = db_manager
         self.root = root
         self.root.title("Weinig Hydromat 2000 - Advanced Tool Management")
         
@@ -37,9 +39,12 @@ class WeinigHydromatManager:
             self.root.geometry("1400x800")
         
         # Инициализация сервисов
-        self.db = DatabaseManager()
+        self.db = self.db_manager
         self.profile_service = ProfileService(self.db)
         self.tool_service = ToolService(self.db)
+
+        from services.size_service import SizeService
+        self.size_service = SizeService(self.db_manager.db_path)
         
         # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРА БЕЗОПАСНОСТИ
         from config.security import get_security_manager
@@ -198,70 +203,59 @@ class WeinigHydromatManager:
         self.show_profile_details()
     
     def show_profile_details(self):
-        """Показывает детали текущего профиля"""
+        print("DEBUG: show_profile_details CALLED, current_profile_id =", self.current_profile_id)
+
         if not self.current_profile_id:
             self.clear_display()
             return
-        
-        # Получаем текущий профиль
-        profile = self.profile_service.get_current_profile()
+
+        # Загружаем профиль напрямую из БД
+        profile = self.profile_service.get_profile_by_id(self.current_profile_id)
         if not profile:
             self.clear_display()
             return
-        
-        # Обновляем переменные
+
+        # Обновляем UI
         self.current_profile_var.set(f"Current: {profile.name}")
         self.profile_name_var.set(profile.name)
         self.profile_desc_var.set(profile.description or "No description")
         self.feed_rate_var.set(f"{profile.feed_rate} m/min" if profile.feed_rate else "")
         self.material_size_var.set(profile.material_size or "Not specified")
-        
-        # ВАЖНО: Получаем актуальный product_size
-        # Сначала пытаемся получить из самого профиля
+
+        # Получаем product_size
         product_size = getattr(profile, 'product_size', '')
-        
-        # Если в профиле пусто, пытаемся получить из вариантов размеров
+
         if not product_size:
             try:
-                from services.size_service import SizeService
-                size_service = SizeService()
+                size_service = self.parent.size_service  # корректный источник
                 variants = size_service.get_product_variants_for_profile(profile.id)
-                
+
                 if variants:
-                    # Находим default вариант или берем первый
-                    default_variant = None
-                    for variant in variants:
-                        if variant.get('is_default'):
-                            default_variant = variant
-                            break
-                    
-                    if not default_variant and variants:
-                        default_variant = variants[0]
-                    
-                    if default_variant:
-                        thickness = default_variant.get('thickness')
-                        if thickness:
-                            product_size = f"{default_variant['width']} x {thickness}"
-                        else:
-                            product_size = f"{default_variant['width']}"
-                        
-                        # Обновляем профиль в БД для будущих загрузок
-                        self.profile_service.update_profile_product_size(
-                            profile.id, product_size
-                        )
+                    default_variant = next((v for v in variants if v.get('is_default')), variants[0])
+
+                    width = default_variant.get('width')
+                    thickness = default_variant.get('thickness')
+
+                    if thickness:
+                        product_size = f"{width} x {thickness}"
                     else:
-                        product_size = "Not specified"
+                        product_size = f"{width}"
+
+                    # Сохраняем в БД
+                    self.profile_service.update_profile_product_size(profile.id, product_size)
                 else:
                     product_size = "Not specified"
+
             except Exception as e:
                 print(f"DEBUG: Error loading product size: {e}")
                 product_size = "Not specified"
-        
+
+        print("DEBUG: final product_size to display:", product_size)
         self.product_size_var.set(product_size)
-        
-        # Загружаем превью PDF (первая страница)
+
+        # Загружаем превью PDF
         self._load_profile_preview(profile.get_preview())
-        
+
         # Загружаем инструменты
         self.load_profile_tools()
     
@@ -1368,41 +1362,64 @@ class WeinigHydromatManager:
     
     def add_new_profile(self):
         """Добавляет новый профиль"""
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+        # Проверка доступа
         if self.security.is_read_only():
-            show_warning(self.root, "Access Denied", 
-                        "Cannot add profiles in Read Only mode.\n\n"
-                        "Press Ctrl+Shift+F to switch to Full Access mode.")
+            show_warning(
+                self.root,
+                "Access Denied",
+                "Cannot add profiles in Read Only mode.\n\n"
+                "Press Ctrl+Shift+F to switch to Full Access mode."
+            )
             return
-        
-        ProfileEditor(
-            self.root,
-            self.profile_service,
-            callback=self.load_profiles
-        )
-    
+
+        try:
+            # Открываем редактор в режиме создания (profile_id=None)
+            editor = ProfileEditor(
+                parent=self,
+                profile_id=None,
+                security_mode=getattr(self, "security_mode", "FULL ACCESS"),
+                db_manager=self.db_manager
+            )
+
+            # Попытка сфокусировать окно редактора (не критично)
+            try:
+                if hasattr(editor, "window"):
+                    editor.window.lift()
+                    editor.window.focus_force()
+            except Exception:
+                logger.debug("Could not force-focus ProfileEditor window", exc_info=True)
+
+            return editor
+
+        except Exception as e:
+            logger.exception("Failed to open ProfileEditor")
+            messagebox.showerror(self.root, "Error", f"Failed to open profile editor: {e}")
+            return None
+   
     def edit_profile(self):
         """Редактирует выбранный профиль"""
         if not self.current_profile_id:
             show_warning(self.root, "Warning", "Please select a profile to edit")
             return
-        
-        # ПРОВЕРКА ДОСТУПА (НОВОЕ)
+
         if self.security.is_read_only():
-            show_warning(self.root, "Access Denied", 
-                        "Cannot edit profiles in Read Only mode.\n\n"
-                        "Press Ctrl+Shift+F to switch to Full Access mode.")
+            show_warning(
+                self.root,
+                "Access Denied",
+                "Cannot edit profiles in Read Only mode.\n\n"
+                "Press Ctrl+Shift+F to switch to Full Access mode."
+            )
             return
-        
+
         profile = self.profile_service.get_current_profile()
         if profile:
             ProfileEditor(
-                self.root,
-                self.profile_service,
-                profile=profile,
-                callback=self.load_profiles
+                parent=self,
+                profile_id=profile.id,   # ← ВОТ ТАК ПРАВИЛЬНО
+                #security_mode=self.security_mode,
+                db_manager=self.db_manager
             )
-    
+  
     def delete_profile(self):
         """Удаляет выбранный профиль"""
         if not self.current_profile_id:

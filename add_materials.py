@@ -18,12 +18,21 @@ cursor.execute('''
 
 # Добавляем тестовые данные
 materials = [
-    (50, 50, 'Economy Blank', 'Бюджетная заготовка'),
-    (75, 50, 'Standard Blank', 'Стандартная заготовка'),
-    (100, 50,'Blank', 'Blank'),
-    (125, 50, 'Premium Blank', 'Премиум заготовка'),
-    (150, 50, 'Small Blank', 'Малая заготовка'),
-    (200.0, 50.0, 'Large Blank', 'Большая заготовка'),
+    (50, 50, 'Thermowood', 'WT'),
+    (75, 50, 'Thermowood', 'WT'),
+    (100, 50,'Thermowood', 'WT'),
+    (125, 50, 'Thermowood', 'WT'),
+    (150, 50, 'Thermowood', 'WT'),
+    (200, 50, 'Thermowood', 'WT'),
+    (75, 32, 'Thermowood', 'WT'),
+    (100, 32, 'Thermowood', 'WT'),
+    (125, 32, 'Thermowood', 'WT'),
+    (150, 32, 'Thermowood', 'WT'),
+    (150, 38, 'Thermowood', 'WT'),
+    (100, 25, 'Thermowood', 'WT'),
+    (125, 25, 'Thermowood', 'WT'),
+    (150, 25, 'Thermowood', 'WT'),
+    (200, 25, 'Thermowood', 'WT'),
 ]
 
 cursor.executemany(

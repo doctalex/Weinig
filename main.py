@@ -200,7 +200,11 @@ def main():
     # Create and run the application
     try:
         from gui.main_window import WeinigHydromatManager
-        app = WeinigHydromatManager(root)
+        from core.database import DatabaseManager
+
+        db_manager = DatabaseManager()
+        app = WeinigHydromatManager(root, db_manager)
+
         logger.info("Application started successfully")
         
         # Handle window closing

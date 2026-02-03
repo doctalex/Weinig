@@ -1,0 +1,97 @@
+diff --git a/gui/profile_editor.py b/gui/profile_editor.py
+index 1234567..abcdef0 100644
+--- a/gui/profile_editor.py
++++ b/gui/profile_editor.py
+@@ -150,7 +150,7 @@ class ProfileEditor:
+         # Таблица вариантов - height=4 вместо 5
+-        columns = ("Width", "Thickness", "Default")
++        columns = ("Width", "Thickness", "Default", "Material")
+
+         self.product_tree = ttk.Treeview(
+             product_frame,
+@@ -165,6 +165,10 @@ class ProfileEditor:
+         self.product_tree.heading("Default", text="Active")
++        self.product_tree.heading("Material", text="Material")
+
+         self.product_tree.column("Width", width=80, anchor="center")
+         self.product_tree.column("Thickness", width=100, anchor="center")
+         self.product_tree.column("Default", width=60, anchor="center")
++        self.product_tree.column("Material", width=120, anchor="center")
+
+@@ -310,6 +314,22 @@ class ProfileEditor:
+         # Добавляем все варианты ИЗ self.product_variants
+         for i, variant in enumerate(self.product_variants):
+             thickness = variant.get('thickness', '')
+             if thickness:
+                 thickness = f"{thickness}"
++
++            # --- MATERIAL NAME ---
++            material_id = variant.get('material_id')
++            material_obj = None
++            if material_id:
++                material_obj = self.size_service.get_material_size_by_id(material_id)
++
++            material_name = material_obj.display_name() if material_obj else ""
+
+             values = (
+                 variant.get('width', ''),
+                 thickness,
+                 '✓' if variant.get('is_default') else '',
++                material_name
+             )
+
+             item_id = f"variant_{variant.get('id', variant.get('temp_id', i))}"
+@@ -340,6 +360,20 @@ class ProfileEditor:
+         for v in self.product_variants:
+             v['is_default'] = False
+
+         # 2. Активируем выбранный
+         for v in self.product_variants:
+             if v.get('id') == variant_id or v.get('temp_id') == variant_id:
+                 v['is_default'] = True
++
++                # --- SET MATERIAL IN COMBOBOX ---
++                material_id = v.get('material_id')
++                if material_id:
++                    material = self.size_service.get_material_size_by_id(material_id)
++                    if material:
++                        self.material_size_var.set(material.display_name())
++                else:
++                    self.material_size_var.set("")
++
+                 break
+
+@@ -380,6 +414,22 @@ class ProfileEditor:
+                 variant_data = {
+                     'temp_id': len(self.edited_variants) + 1000,
+                     'width': width_val,
+                     'thickness': thickness_val,
+                     'is_default': False
+                 }
++
++                # --- MATERIAL FOR NEW VARIANT ---
++                selected_name = self.material_size_var.get()
++                material_sizes = self.size_service.get_all_material_sizes()
++                material_obj = next((m for m in material_sizes if m.display_name() == selected_name), None)
++                variant_data['material_id'] = material_obj.id if material_obj else None
+
+                 if not self.product_variants:
+                     variant_data['is_default'] = True
+
+                 self.edited_variants.append(variant_data)
+                 self.product_variants.append(variant_data)
+@@ -430,6 +480,20 @@ class ProfileEditor:
+                 for variant in self.product_variants:
+                     if variant.get('id') == variant_id or variant.get('temp_id') == variant_id:
+                         variant['width'] = width_val
+                         variant['thickness'] = thickness_val
++
++                        # --- UPDATE MATERIAL ---
++                        selected_name = self.material_size_var.get()
++                        material_sizes = self.size_service.get_all_material_sizes()
++                        material_obj = next((m for m in material_sizes if m.display_name() == selected_name), None)
++                        variant['material_id'] = material_obj.id if material_obj else None
++
+                         break
+
+                 self._update_product_variants_table()

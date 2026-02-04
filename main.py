@@ -23,19 +23,19 @@ except ImportError as e:
             print("Не удалось показать диалог ошибки")
     sys.exit(1)
 
-# Windows 7 compatibility settings
+# Windows compatibility settings
 if platform.system() == 'Windows':
-    # Set process DPI awareness for better display scaling
     try:
-        # Проверяем наличие функции SetProcessDpiAwareness
-        if hasattr(ctypes.windll.shcore, 'SetProcessDpiAwareness'):
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)  # System DPI aware
+        # Пытаемся установить режим 2 (Per Monitor DPI Aware) для Win 10+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2) 
     except (AttributeError, OSError):
         try:
-            # Fallback для старых версий Windows
-            if hasattr(ctypes.windll.user32, 'SetProcessDPIAware'):
+            # Fallback для Win 8.1 / 7
+            if hasattr(ctypes.windll.shcore, 'SetProcessDpiAwareness'):
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            elif hasattr(ctypes.windll.user32, 'SetProcessDPIAware'):
                 ctypes.windll.user32.SetProcessDPIAware()
-        except (AttributeError, OSError):
+        except:
             pass
 
 # Add the project root directory to the path

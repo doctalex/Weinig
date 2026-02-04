@@ -9,6 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 from typing import Optional
 from pathlib import Path
 from datetime import datetime
+from gui.base.scroll_container import ScrollableContainer
 
 from core.models import Profile
 from services.profile_service import ProfileService
@@ -86,18 +87,31 @@ class ProfileEditor:
         self.setup_ui()
     
     def setup_ui(self):
-        """Настройка интерфейса с оптимизированным расположением"""
+        """Настройка интерфейса с поддержкой прокрутки и адаптивным размером"""
+        from gui.base.scroll_container import ScrollableContainer
+
         self.window = tk.Toplevel(self.parent.root)
         title = "Edit Profile" if self.is_editing else "Add Profile"
         self.window.title(title)
-        self.window.geometry("800x850")
-        self.window.minsize(800, 700)
+
+        # --- АДАПТИВНЫЙ РАЗМЕР ОКНА ---
+        screen_h = self.window.winfo_screenheight()
+        # Если экран маленький (например, ноутбук с 150% DPI), ограничиваем высоту окна
+        actual_h = min(750, screen_h - 120) 
+        self.window.geometry(f"820x{actual_h}") # 820 для запаса под полосу прокрутки
+        self.window.minsize(800, 500)
 
         self.window.transient(self.parent.root)
         self.window.grab_set()
         self.window.focus_set()
 
-        main_container = ttk.Frame(self.window)
+        # --- ВНЕДРЕНИЕ ПРОКРУТКИ ---
+        # Создаем прокручиваемый контейнер
+        scroll_wrapper = ScrollableContainer(self.window)
+        scroll_wrapper.pack(fill=tk.BOTH, expand=True)
+
+        # Теперь main_container размещается внутри прокручиваемой области
+        main_container = ttk.Frame(scroll_wrapper.scrollable_content)
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
         # --- Profile Name ---
@@ -145,8 +159,6 @@ class ProfileEditor:
         ttk.Label(material_group, text="Material Size:").pack(anchor=tk.W)
 
         material_sizes = self.size_service.get_all_material_sizes()
-        print("DEBUG MATERIAL SIZES:", material_sizes)
-
         size_names = [s.display_name() for s in material_sizes]
         size_names.insert(0, "")
 
@@ -162,6 +174,7 @@ class ProfileEditor:
             width=25
         )
         self.material_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.material_combo.bind("<<ComboboxSelected>>", self._on_material_changed)
 
         # --- Product Sizes ---
         product_frame = ttk.LabelFrame(main_container, text="Product Sizes", padding="8")
@@ -175,12 +188,12 @@ class ProfileEditor:
             height=4
         )
         self.product_tree.bind("<Double-1>", self._on_variant_double_click)
+        self.product_tree.bind("<<TreeviewSelect>>", self._on_product_variant_selected)
         
         self.product_tree.heading("Width", text="Width (mm)")
         self.product_tree.heading("Thickness", text="Thickness (mm)")
         self.product_tree.heading("Default", text="Active")
         self.product_tree.heading("Material", text="Material")
-        
 
         self.product_tree.column("Width", width=80, anchor="center")
         self.product_tree.column("Thickness", width=100, anchor="center")
@@ -279,18 +292,10 @@ class ProfileEditor:
                                        command=self._safe_save, width=12)
             self.save_btn.pack(side=tk.LEFT)
 
-        # Загружаем данные профиля
-        if self.is_editing and self.profile:
-            self._load_profile_data()
-            self._on_variant_selected()
-
-        self.window.bind('<Return>', lambda e: self.save())
-        self.window.bind('<Escape>', lambda e: self.window.destroy())
-        self.product_tree.bind("<<TreeviewSelect>>", self._on_variant_selected)
-
+        # Применяем данные и центрируем
+        self._load_profile_data()
+        self._apply_access_mode()
         self.center_window()
-        self.window.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.window.after(150, self._apply_access_mode)
         
     def _on_close(self):
         """Обработчик закрытия окна"""
@@ -382,7 +387,7 @@ class ProfileEditor:
             return None
 
     def _add_product_variant(self):
-        """Добавление варианта"""
+        """Добавление варианта без автоматического назначения материала"""
         from gui.simple_variant_dialog import SimpleVariantDialog
 
         dialog = SimpleVariantDialog(self.window, title="Add Product Size")
@@ -397,26 +402,74 @@ class ProfileEditor:
                     'temp_id': len(self.edited_variants) + 1000,
                     'width': width_val,
                     'thickness': thickness_val,
-                    'is_default': False
+                    'is_default': False,
+                    'material_id': None  # ⭐ Всегда создаем без материала
                 }
 
                 if not self.product_variants:
                     variant_data['is_default'] = True
 
-                # материал
-                selected_name = self.material_size_var.get()
-                material_sizes = self.size_service.get_all_material_sizes()
-                material_obj = next((m for m in material_sizes if m.display_name() == selected_name), None)
-                variant_data['material_id'] = material_obj.id if material_obj else None
-
+                # Добавляем в списки
                 self.edited_variants.append(variant_data)
                 self.product_variants.append(variant_data)
 
+                # ⭐ Сбрасываем комбобокс и фильтр, так как новый вариант чист
+                self.material_size_var.set("")
+                # Обновляем комбобокс полным списком материалов (так как фильтровать пока нечего)
+                all_m = self.size_service.get_all_material_sizes()
+                self.material_combo['values'] = [""] + [m.display_name() for m in all_m]
+
                 self._update_product_variants_table()
+                
+                # Опционально: выделяем новую строку в таблице
+                item_id = f"variant_{variant_data['temp_id']}"
+                self.product_tree.selection_set(item_id)
+                self.product_tree.focus(item_id)
 
             except ValueError:
                 messagebox.showerror("Error", "Please enter valid numeric values")
+    def _on_material_changed(self, event=None):
+        """Обновляет материал ТОЛЬКО для выбранного в данный момент варианта"""
+        # 1. Получаем выбранную строку в таблице
+        item_id = self.product_tree.focus()
+        if not item_id:
+            # Если ничего не выбрано, просто выходим (или сбрасываем комбобокс)
+            return
 
+        # 2. Получаем объект выбранного материала из комбобокса
+        selected_material = self._get_selected_material_size()
+        m_id = selected_material.id if selected_material else None
+        
+        # 3. Находим соответствующий вариант в нашем списке и обновляем только его
+        idx_str = item_id.split('_')[-1]
+        for variant in self.product_variants:
+            if str(variant.get('id', variant.get('temp_id'))) == idx_str:
+                variant['material_id'] = m_id
+                print(f"DEBUG: Updated material_id to {m_id} for variant {idx_str}")
+                break
+        
+        # 4. Перерисовываем таблицу, чтобы увидеть изменения в колонке Material
+        self._update_product_variants_table()
+    
+    def _get_selected_variant(self):
+        """Возвращает данные варианта, выбранного в таблице"""
+        item_id = self.product_tree.focus()
+        if not item_id:
+            return None
+
+        try:
+            # Извлекаем ID из iid строки (например, из "variant_105" получаем "105")
+            idx_str = item_id.split('_')[-1]
+            
+            # Ищем этот ID в нашем списке вариантов
+            for v in self.product_variants:
+                if str(v.get('id', v.get('temp_id'))) == idx_str:
+                    return v
+            return None
+        except Exception as e:
+            print(f"DEBUG: Error in _get_selected_variant: {e}")
+            return None
+    
     def _edit_product_variant(self):
         """Редактирование варианта"""
         selection = self.product_tree.selection()
@@ -483,6 +536,9 @@ class ProfileEditor:
             ]
 
         self._update_product_variants_table()
+        if not self.product_variants:
+            print("DEBUG: No variants left, clearing material selection")
+            self.material_size_var.set("") # Устанавливаем пустую строку (первая строка комбобокса)
 
     def _move_variant(self, direction):
         """Перемещение варианта"""
@@ -729,7 +785,7 @@ class ProfileEditor:
             self.pdf_was_uploaded = False
             
     def save(self):
-        """Сохраняет профиль с PDF"""
+        """Сохраняет профиль с PDF и синхронизирует материал активного варианта"""
         if self._saving:
             return
         self._saving = True
@@ -764,9 +820,28 @@ class ProfileEditor:
             except ValueError:
                 feed_rate = 30.0
 
-            selected_material_size = self._get_selected_material_size()
-            material_size_str = selected_material_size.display_name() if selected_material_size else ""
+            # --- ЛОГИКА ОПРЕДЕЛЕНИЯ МАТЕРИАЛА ДЛЯ ГЛАВНОГО ОКНА ---
+            # Ищем вариант с галочкой (is_default)
+            default_variant = next((v for v in self.product_variants if v.get('is_default')), None)
+            
+            # Если вариантов несколько, но галочка не стоит, берем первый как основной
+            if not default_variant and self.product_variants:
+                default_variant = self.product_variants[0]
 
+            material_size_str = ""
+            if default_variant and default_variant.get('material_id'):
+                # Если у активного варианта есть материал, подтягиваем его имя из БД
+                mat_obj = self.size_service.get_material_size_by_id(default_variant['material_id'])
+                if mat_obj:
+                    material_size_str = mat_obj.display_name()
+            
+            # Если активный вариант не найден или у него нет материала, 
+            # используем текущее значение из комбобокса как запасное
+            if not material_size_str:
+                selected_material_size = self._get_selected_material_size()
+                material_size_str = selected_material_size.display_name() if selected_material_size else ""
+
+            # --- Обработка PDF ---
             pdf_data_to_save = None
             pdf_filename_to_save = None
 
@@ -781,12 +856,7 @@ class ProfileEditor:
                     pdf_data_to_save = None
                     pdf_filename_to_save = None
                 else:
-                    if self.original_pdf_data:
-                        pdf_data_to_save = self.original_pdf_data
-                        pdf_filename_to_save = None
-                    else:
-                        pdf_data_to_save = None
-                        pdf_filename_to_save = None
+                    pdf_data_to_save = self.original_pdf_data if self.original_pdf_data else None
 
             log_profile_change({
                 'name': name,
@@ -825,74 +895,59 @@ class ProfileEditor:
                 )
                 success = profile_id is not None
                 action = "created"
+                
+                if success:
+                    self.profile = self.profile_service.get_profile_by_id(profile_id)
+                    self.is_editing = True
 
             if success and profile_id:
                 print(f"DEBUG: Saving {len(self.product_variants)} product variants for profile {profile_id}")
 
-                product_size_str = self._get_product_size_string()
-                print(f"DEBUG: Product size string: '{product_size_str}'")
+                self._save_product_variants(profile_id)
+                self.product_variants = self.size_service.get_product_variants_for_profile(profile_id)
+                self._update_product_variants_table()
 
+                product_size_str = self._get_product_size_string()
                 update_success = self.profile_service.update_profile_product_size(
                     profile_id, product_size_str
                 )
-                print(f"DEBUG: Updated profile product_size: {update_success}")
-
-                self._save_product_variants(profile_id)
-
-                updated_profile = self.profile_service.get_profile_by_id(profile_id)
-                if updated_profile and hasattr(updated_profile, 'product_size'):
-                    print(f"DEBUG: Profile updated with product_size: {updated_profile.product_size}")
+                
+                # Дополнительно обновляем material_size в БД на случай, если он изменился в процессе сохранения вариантов
+                self.profile_service.update_profile(profile_id, material_size=material_size_str)
 
             if success:
                 messagebox.showinfo("Success", f"Profile {action} successfully")
-                print("DEBUG: save() success, profile_id =", profile_id)
-                if hasattr(self.parent, "profile_service"):
-                    print("DEBUG: before set_current_profile, current_profile_id =", self.parent.profile_service.current_profile_id)
-                    self.parent.profile_service.set_current_profile(profile_id)
-                    print("DEBUG: after set_current_profile, current_profile_id =", self.parent.profile_service.current_profile_id)
-
-                # ⭐ ВАЖНО: обновляем текущий профиль в MainWindow
+                
                 if hasattr(self.parent, "profile_service"):
                     try:
                         self.parent.profile_service.set_current_profile(profile_id)
                     except Exception as e:
                         print(f"DEBUG: Error setting current profile: {e}")
 
-                # Обновляем UI главного окна
                 try:
                     if hasattr(self.parent, 'show_profile_details'):
                         self.parent.show_profile_details()
                     if hasattr(self.parent, 'load_profiles'):
                         self.parent.load_profiles()
-                    if hasattr(self.parent, 'load_profile_tools'):
-                        self.parent.load_profile_tools()
                 except Exception as e:
-                    print(f"DEBUG: Error updating parent directly: {e}")
+                    print(f"DEBUG: Error updating parent UI: {e}")
 
                 if hasattr(self, 'callback') and self.callback:
-                    try:
-                        self.callback()
-                    except Exception as e:
-                        print(f"DEBUG: Callback error: {e}")
+                    try: self.callback()
+                    except: pass
 
                 self.pdf_was_uploaded = False
                 self.pdf_was_removed = False
                 self.window.destroy()
-
             else:
                 messagebox.showerror("Error", f"Failed to {action} profile")
                 self._saving = False
-                if hasattr(self, 'save_btn'):
-                    self.save_btn.config(state='normal')
+                self.save_btn.config(state='normal')
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
-            print(f"DEBUG: Save error details: {e}")
-            import traceback
-            traceback.print_exc()
             self._saving = False
-            if hasattr(self, 'save_btn'):
-                self.save_btn.config(state='normal')
+            if hasattr(self, 'save_btn'): self.save_btn.config(state='normal')
 
     def _get_product_size_string(self):
         """Формирует строку product_size для отображения в главном окне"""
@@ -915,59 +970,56 @@ class ProfileEditor:
             return f"{default_variant['width']}"
 
     def _save_product_variants(self, profile_id):
-        """Сохраняет все варианты размеров продукта в базу данных"""
+        """Сохраняет варианты размеров продукта, используя правильные методы SizeService"""
         try:
-            print(f"DEBUG: Saving {len(self.product_variants)} product variants")
+            print(f"DEBUG: Saving {len(self.product_variants)} product variants for profile {profile_id}")
 
-            if self.is_editing:
-                for variant_id in self.deleted_variant_ids:
-                    print(f"DEBUG: Deleting variant ID {variant_id}")
-                    self.size_service.delete_product_variant(variant_id)
+            # 1. Удаление помеченных на удаление
+            if hasattr(self, 'deleted_variant_ids') and self.deleted_variant_ids:
+                for v_id in self.deleted_variant_ids:
+                    self.size_service.delete_product_variant(v_id)
+                self.deleted_variant_ids = []
 
-                existing_variants = self.size_service.get_product_variants_for_profile(profile_id)
-                existing_ids = [v['id'] for v in existing_variants]
+            # 2. Получаем текущие ID из базы для проверки
+            existing_variants = self.size_service.get_product_variants_for_profile(profile_id)
+            existing_ids = [v['id'] for v in existing_variants] if existing_variants else []
 
-                for variant in self.product_variants:
-                    variant_id = variant.get('id')
+            # 3. Сохранение/Обновление
+            for variant in self.product_variants:
+                v_id = variant.get('id')
+                
+                # Подготовка данных (защита от отсутствующих ключей)
+                width = variant.get('width', 0)
+                thickness = variant.get('thickness')
+                is_default = variant.get('is_default', False)
+                material_id = variant.get('material_id')
 
-                    if variant_id and variant_id in existing_ids:
-                        print(f"DEBUG: Updating existing variant ID {variant_id}")
-                        self.size_service.update_product_variant(
-                            variant_id=variant_id,
-                            width=variant['width'],
-                            thickness=variant.get('thickness'),
-                            is_default=variant.get('is_default', False),
-                            material_id=variant.get('material_id')
-                        )
-                    else:
-                        print(f"DEBUG: Creating new variant for profile {profile_id}")
-                        new_id = self.size_service.create_product_variant(
-                            profile_id=profile_id,
-                            width=variant['width'],
-                            thickness=variant.get('thickness'),
-                            is_default=variant.get('is_default', False),
-                            material_id=variant.get('material_id')
-                        )
+                if v_id and v_id in existing_ids:
+                    # ОБНОВЛЕНИЕ существующего
+                    print(f"DEBUG: Updating variant ID {v_id}")
+                    self.size_service.update_product_variant(
+                        variant_id=v_id,
+                        width=width,
+                        thickness=thickness,
+                        is_default=is_default,
+                        material_id=material_id
+                    )
+                else:
+                    # СОЗДАНИЕ НОВОГО (Используем точное имя метода из вашего сервиса)
+                    print(f"DEBUG: Inserting new variant for profile {profile_id}")
+                    new_id = self.size_service.insert_product_variant(
+                        profile_id=profile_id,
+                        width=width,
+                        thickness=thickness,
+                        is_default=is_default,
+                        material_id=material_id
+                    )
+                    if new_id:
                         variant['id'] = new_id
-            else:
-                for i, variant in enumerate(self.product_variants):
-                    print(f"DEBUG: Creating variant {i+1}/{len(self.product_variants)}")
-                    try:
-                        new_id = self.size_service.create_product_variant(
-                            profile_id=profile_id,
-                            width=variant['width'],
-                            thickness=variant.get('thickness'),
-                            is_default=variant.get('is_default', False),
-                            material_id=variant.get('material_id')
-                        )
-                        variant['id'] = new_id
-                    except Exception as e:
-                        print(f"DEBUG: Error creating product variant: {e}")
 
-            print(f"DEBUG: Product variants saved successfully")
-
+            print("DEBUG: Product variants saved successfully")
         except Exception as e:
-            print(f"DEBUG: Error saving product variants: {e}")
+            print(f"DEBUG: Error in _save_product_variants: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1024,36 +1076,49 @@ class ProfileEditor:
                 show_error(self.window, "Error", f"Delete failed: {e}")
 
     def center_window(self):
-        """Центрирует окно"""
+        """Центрирует окно с защитой от вылета за границы экрана"""
         self.window.update_idletasks()
+        
+        # Размеры этого окна
+        width = self.window.winfo_width()
+        height = self.window.winfo_height()
+        
+        # Размеры экрана
+        screen_width = self.window.winfo_screenwidth()
+        screen_height = self.window.winfo_screenheight()
 
+        # По умолчанию считаем центр экрана
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+
+        # Если есть родитель, пытаемся центрироваться относительно него
         try:
             if self.parent and self.parent.winfo_exists():
-                parent_x = self.parent.winfo_rootx()
-                parent_y = self.parent.winfo_rooty()
-                parent_width = self.parent.winfo_width()
-                parent_height = self.parent.winfo_height()
-
-                window_width = self.window.winfo_width()
-                window_height = self.window.winfo_height()
-
-                x = parent_x + (parent_width - window_width) // 2
-                y = parent_y + (parent_height - window_height) // 2
-
-                self.window.geometry(f"+{x}+{y}")
-                return
+                p_x = self.parent.winfo_rootx()
+                p_y = self.parent.winfo_rooty()
+                p_w = self.parent.winfo_width()
+                p_h = self.parent.winfo_height()
+                
+                x = p_x + (p_w - width) // 2
+                y = p_y + (p_h - height) // 2
         except:
             pass
 
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
-        window_width = self.window.winfo_width()
-        window_height = self.window.winfo_height()
+        # ⭐ ЗАЩИТА ОТ "СПОЛЗАНИЯ"
+        padding = 30  # Отступ от краев экрана
+        
+        # Не даем уйти за левый и верхний край
+        x = max(padding, x)
+        y = max(padding, y)
+        
+        # Не даем уйти за правый и нижний край
+        if x + width > screen_width - padding:
+            x = screen_width - width - padding
+        if y + height > screen_height - padding:
+            y = screen_height - height - padding
 
-        x = (screen_width - window_width) // 2
-        y = (screen_height - window_height) // 2
-
-        self.window.geometry(f"+{x}+{y}")
+        # Применяем координаты
+        self.window.geometry(f"+{int(x)}+{int(y)}")
 
     def _apply_access_mode(self):
         """Применяет режим доступа (READ ONLY или FULL ACCESS) к виджетам"""

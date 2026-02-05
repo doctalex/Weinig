@@ -4,6 +4,7 @@
 import os
 import tkinter as tk
 from tkinter import ttk
+from gui.base.scroll_container import ScrollableContainer
 import logging
 from tkinter import messagebox
 from typing import Optional, Dict

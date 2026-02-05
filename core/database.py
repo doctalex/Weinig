@@ -214,6 +214,30 @@ class DatabaseManager:
         """Получает все профили"""
         return self.execute_query('SELECT * FROM Profiles ORDER BY Name')
     
+    def get_profiles_with_active_info(self) -> List[sqlite3.Row]:
+        """
+        Получает список всех профилей, объединяя их с данными 'Активного' варианта.
+        Активным считается вариант, где is_default = 1.
+        """
+        query = """
+            SELECT 
+                p.ID, 
+                p.Name, 
+                v.width, 
+                v.thickness, 
+                m.name as material_name
+            FROM Profiles p
+            LEFT JOIN product_variants v ON p.ID = v.profile_id AND v.is_default = 1
+            LEFT JOIN materials m ON v.material_id = m.id
+            ORDER BY p.Name
+        """
+        try:
+            with self._get_connection() as conn:
+                return conn.execute(query).fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка при получении профилей с активной информацией: {e}")
+            return []
+    
     def get_profile(self, profile_id: int) -> Optional[sqlite3.Row]:
         """Получает профиль по ID"""
         return self.execute_query(

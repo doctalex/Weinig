@@ -50,6 +50,15 @@ class ProfileService(Observable):
         rows = self.db.get_all_profiles()
         return [Profile.from_db_row(row) for row in rows]
     
+    def get_all_profiles_with_active_info(self) -> List[Dict[str, Any]]:
+        """
+        Возвращает список профилей с данными об активном материале и размере.
+        Используется для корректного отображения в Главном окне.
+        """
+        rows = self.db.get_profiles_with_active_info()
+        # Преобразуем sqlite3.Row в обычные словари для стабильной работы GUI
+        return [dict(row) for row in rows]
+    
     def get_profile(self, profile_id: int) -> Optional[Profile]:
         """Gets a profile by ID"""
         row = self.db.get_profile(profile_id)

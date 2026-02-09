@@ -63,14 +63,24 @@ class WeinigHydromatManager:
         self.current_profile_id: Optional[int] = None
         self.image_windows = {}
         self.modal_windows = {}
+
+        # --- ГЛОБАЛЬНЫЙ DPI СКРОЛЛ (ВСТАВКА ТУТ) ---
+        from gui.base.scroll_container import ScrollableContainer
+        self.main_wrapper = ScrollableContainer(self.root)
+        self.main_wrapper.pack(fill="both", expand=True)
         
-        # Настройка интерфейса
+        # Перенаправляем все, что раньше строилось в root, в наш контейнер
+        # Теперь self.root для всех дочерних элементов — это этот фрейм
+        self.main_view = self.main_wrapper.scrollable_content 
+        # --------------------------------------------
+        
+        # Настройка интерфейса (теперь он построится внутри main_view)
         self.setup_ui()
         
         # Загружаем профили с сортировкой по ID по умолчанию
         self._sort_column = 'id'
         self._sort_reverse = False
-        self.load_profiles()
+        #self.load_profiles()
         
         # Карта голов
         self.head_position_map = self.tool_service.get_head_position_mapping()
@@ -90,6 +100,8 @@ class WeinigHydromatManager:
         
         # Автоматический бэкап при запуске (1 раз в день)
         self._auto_backup_on_startup()
+        
+        self.root.after(500, self.load_profiles)
 
     def _auto_backup_on_startup(self):
         """Автоматическое создание бэкапа при запуске (1 раз в день)"""
@@ -299,8 +311,8 @@ class WeinigHydromatManager:
         self.header_font = ("Arial", 14, "bold")
         
         # Главный фрейм
-        main_frame = ttk.Frame(self.root, padding="15")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame = ttk.Frame(self.main_view, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Настройка растягивания
         self.root.columnconfigure(0, weight=1)
@@ -364,7 +376,7 @@ class WeinigHydromatManager:
             font=('Arial', 12, 'bold'))  # bold font for headers
             
         left_panel = ttk.LabelFrame(parent, padding="15")
-        left_panel.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W), padx=(0, 15))
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 15))
         
         # Create a frame for the header with icon and title
         header_frame = ttk.Frame(left_panel)
@@ -421,7 +433,8 @@ class WeinigHydromatManager:
             columns=('id', 'name'),
             show='headings',
             yscrollcommand=scrollbar.set,
-            selectmode='browse'
+            selectmode='browse',
+            height=15
         )
         
         # Configure columns with sorting
@@ -481,7 +494,7 @@ class WeinigHydromatManager:
     def _setup_right_panel(self, parent):
         """Настройка правой панели с деталями"""
         right_panel = ttk.Frame(parent)
-        right_panel.grid(row=0, column=1, sticky=(tk.N, tk.E, tk.S, tk.W))
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Заголовок
         header_frame = ttk.Frame(right_panel)
@@ -1250,6 +1263,8 @@ class WeinigHydromatManager:
         for profile in profiles:
             formatted_id = f"{profile.id:03d}"  # Форматируем ID с ведущими нулями (001, 002, и т.д.)
             self.profiles_tree.insert('', 'end', values=(formatted_id, profile.name))
+        if hasattr(self, 'main_wrapper'):
+            self.main_wrapper.update_idletasks()
         
         # Применяем текущую сортировку
         if hasattr(self, '_sort_column'):

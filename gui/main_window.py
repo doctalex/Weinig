@@ -4,7 +4,6 @@
 import os
 import tkinter as tk
 from tkinter import ttk
-from gui.base.scroll_container import ScrollableContainer
 import logging
 from tkinter import messagebox
 from typing import Optional, Dict
@@ -228,7 +227,7 @@ class WeinigHydromatManager:
 
         if not product_size:
             try:
-                size_service = self.size_service  # корректный источник
+                size_service = self.parent.size_service  # корректный источник
                 variants = size_service.get_product_variants_for_profile(profile.id)
 
                 if variants:
@@ -480,21 +479,12 @@ class WeinigHydromatManager:
             button_frame.columnconfigure(i, weight=1)
     
     def _setup_right_panel(self, parent):
-        """Настройка правой панели с деталями (с защитой от DPI через ScrollableContainer)"""
+        """Настройка правой панели с деталями"""
         right_panel = ttk.Frame(parent)
         right_panel.grid(row=0, column=1, sticky=(tk.N, tk.E, tk.S, tk.W))
         
-        # --- ВНЕДРЕНИЕ СКРОЛЛА ---
-        from gui.base.scroll_container import ScrollableContainer
-        self.details_scroll = ScrollableContainer(right_panel)
-        self.details_scroll.pack(fill=tk.BOTH, expand=True)
-        
-        # Используем ПРАВИЛЬНОЕ имя атрибута: .frame
-        target_frame = self.details_scroll.scrollable_content
-        # -------------------------
-
-        # Заголовок (теперь в target_frame)
-        header_frame = ttk.Frame(target_frame)
+        # Заголовок
+        header_frame = ttk.Frame(right_panel)
         header_frame.pack(fill=tk.X, pady=(0, 15))
         
         ttk.Label(
@@ -511,7 +501,7 @@ class WeinigHydromatManager:
             foreground="blue",
         ).pack(side=tk.RIGHT)
         
-        # ИНДИКАТОР РЕЖИМА БЕЗОПАСНОСТИ
+        # ДОБАВЛЯЕМ ИНДИКАТОР РЕЖИМА БЕЗОПАСНОСТИ (НОВОЕ)
         style = ttk.Style()
         bg_color = style.lookup('TLabel', 'background') or 'SystemButtonFace'
         
@@ -524,57 +514,97 @@ class WeinigHydromatManager:
         )
         self.security_mode_label.pack(side=tk.RIGHT, padx=(0, 20))
         
-        # Детали профиля (в target_frame)
-        details_frame = ttk.LabelFrame(target_frame, text="PROFILE DETAILS", padding="15")
+        # Детали профиля
+        details_frame = ttk.LabelFrame(right_panel, text="PROFILE DETAILS", padding="15")
         details_frame.pack(fill=tk.X, pady=(0, 15))
         
         self._setup_profile_details(details_frame)
         
-        # Таблица голов (в target_frame)
-        tools_frame = ttk.LabelFrame(target_frame, text="MILLING HEADS CONFIGURATION", padding="15")
+        # Таблица голов
+        tools_frame = ttk.LabelFrame(right_panel, text="MILLING HEADS CONFIGURATION", padding="15")
         tools_frame.pack(fill=tk.X, pady=(0, 15))
         
         self._setup_heads_table(tools_frame)
         
-        # Панель управления (в target_frame)
-        controls_frame = tk.Frame(target_frame, bg='#fff3e0', relief=tk.RAISED, bd=3)
+        # Панель управления
+        controls_frame = tk.Frame(right_panel, bg='#fff3e0', relief=tk.RAISED, bd=3)
         controls_frame.pack(fill=tk.X, pady=20, padx=10)
         
         self._setup_controls(controls_frame)
-
     
     def _load_profile_preview(self, image_data: Optional[bytes]):
-        """Обновляет изображение превью в существующем лейбле"""
-        if not hasattr(self, 'profile_image_label'):
-            return
-
-        # Если нет данных
+        """Загружает превью профиля (первая страница PDF или изображение)"""
+        # Очищаем текущее изображение
+        if hasattr(self, 'profile_image_label'):
+            self.profile_image_label.config(image='', text='')
+        
+        # Если нет данных для превью
         if not image_data:
-            profile = self.profile_service.get_current_profile()
-            txt = 'PDF Document\n(Double-click)' if profile and profile.has_pdf else 'No Document'
-            self.profile_image_label.config(image='', text=txt, bg="white")
+            if hasattr(self, 'profile_image_label'):
+                profile = self.profile_service.get_current_profile()
+                if profile and profile.has_pdf:
+                    # Есть PDF, но не удалось извлечь превью
+                    self.profile_image_label.config(
+                        text='PDF Document\n(Double-click to open)',
+                        bg="white",
+                        font=("Arial", 10)
+                    )
+                else:
+                    # Нет PDF документа
+                    self.profile_image_label.config(
+                        text='No Document',
+                        bg="white",
+                        font=("Arial", 10)
+                    )
             return
         
         try:
             from PIL import Image, ImageTk
             import io
             
+            # Открываем изображение превью
             img = Image.open(io.BytesIO(image_data))
-            # Оставляем размер 200x200 для четкости
-            img.thumbnail((200, 200), Image.LANCZOS)
+            
+            # Ресайз для UI
+            max_size = (200, 200)
+            img.thumbnail(max_size, Image.LANCZOS)
+            
+            # Конвертируем в Tkinter формат
             photo = ImageTk.PhotoImage(img)
             
-            # Просто конфигурируем уже созданный в setup_ui лейбл
-            self.profile_image_label.config(image=photo, text="")
-            self.profile_image_label.image = photo  
+            # Создаем или обновляем лейбл
+            if not hasattr(self, 'profile_image_label'):
+                self.profile_image_label = ttk.Label(self.profile_image_frame, image=photo)
+                self.profile_image_label.image = photo  # Keep a reference
+                self.profile_image_label.pack(expand=True, fill='both')
+            else:
+                self.profile_image_label.config(image=photo)
+                self.profile_image_label.image = photo
             
+            # Настраиваем курсор и текст
             profile = self.profile_service.get_current_profile()
-            self.profile_image_label.config(cursor="hand2" if profile and profile.has_pdf else "arrow")
+            if profile and profile.has_pdf:
+                # PDF документ - двойной клик открывает PDF
+                self.profile_image_label.config(
+                    cursor="hand2",
+                    text=""
+                )
+            else:
+                # Простое изображение - обычный курсор
+                self.profile_image_label.config(
+                    cursor="arrow",
+                    text=""
+                )
                 
         except Exception as e:
             logger.error(f"Error loading profile preview: {e}")
-            self.profile_image_label.config(text='Preview Error', image='')
-            
+            if hasattr(self, 'profile_image_label'):
+                self.profile_image_label.config(
+                    text='Preview Error',
+                    bg="white",
+                    font=("Arial", 10)
+                )
+    
     def _show_about(self, event=None):
         """Show the About dialog"""
         about_text = """Weinig Hydromat 2000
@@ -625,18 +655,70 @@ class WeinigHydromatManager:
     
     def _setup_profile_details(self, parent):
         """Настройка деталей профиля"""
-        # info_frame теперь внутри нашего скролла (через parent)
         info_frame = ttk.Frame(parent)
-        info_frame.pack(fill=tk.X, expand=True)
+        info_frame.pack(fill=tk.X)
         
-        # Текстовая информация (слева)
+        # Текстовая информация
         text_frame = ttk.Frame(info_frame)
-        text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # Контейнер для превью документа (справа)
-        # Создаем ОДИН раз, чтобы не терять ссылки при сохранении
+        # Фрейм для превью документа
+        self.profile_image_frame = ttk.LabelFrame(parent, text="Document Preview", padding=10)
+        self.profile_image_frame.pack(side=tk.RIGHT, padx=10, pady=5, fill='both')
+        
+        # Название
+        ttk.Label(text_frame, text="Name:", font=("Arial", 12, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=4
+        )
+        self.profile_name_var = tk.StringVar(value="")
+        ttk.Label(text_frame, textvariable=self.profile_name_var, 
+                 font=self.small_font).grid(
+                     row=0, column=1, sticky=tk.W, pady=4, padx=(8, 0)
+                 )
+        
+        # Описание
+        ttk.Label(text_frame, text="Description:", font=("Arial", 12, "bold")).grid(
+            row=1, column=0, sticky=tk.W, pady=4
+        )
+        self.profile_desc_var = tk.StringVar(value="")
+        ttk.Label(text_frame, textvariable=self.profile_desc_var, 
+                 wraplength=500, font=self.small_font).grid(
+                     row=1, column=1, sticky=tk.W, pady=4, padx=(8, 0)
+                 )
+        
+        # Скорость подачи
+        ttk.Label(text_frame, text="Feed Rate:", font=("Arial", 12, "bold")).grid(
+            row=2, column=0, sticky=tk.W, pady=4
+        )
+        self.feed_rate_var = tk.StringVar(value="")
+        ttk.Label(text_frame, textvariable=self.feed_rate_var, 
+                 font=self.small_font).grid(
+                     row=2, column=1, sticky=tk.W, pady=4, padx=(8, 0)
+                 )
+        
+        # Размер материала
+        ttk.Label(text_frame, text="Material Size:", font=("Arial", 12, "bold")).grid(
+            row=3, column=0, sticky=tk.W, pady=4
+        )
+        self.material_size_var = tk.StringVar(value="")
+        ttk.Label(text_frame, textvariable=self.material_size_var, 
+                 font=self.small_font).grid(
+                     row=3, column=1, sticky=tk.W, pady=4, padx=(8, 0)
+                 )
+        
+        # Размер изделия
+        ttk.Label(text_frame, text="Product Size:", font=("Arial", 12, "bold")).grid(
+            row=4, column=0, sticky=tk.W, pady=4
+        )
+        self.product_size_var = tk.StringVar(value="")
+        ttk.Label(text_frame, textvariable=self.product_size_var, 
+                 font=self.small_font).grid(
+                     row=4, column=1, sticky=tk.W, pady=4, padx=(8, 0)
+                 )
+        
+        # Контейнер для превью документа (PDF или изображения)
         self.profile_image_frame = ttk.Frame(info_frame, width=200, height=150)
-        self.profile_image_frame.pack_propagate(False) 
+        self.profile_image_frame.pack_propagate(False)  # Prevent resizing
         self.profile_image_frame.pack(side=tk.RIGHT, padx=(20, 0), pady=10)
         
         # Лейбл для превью
@@ -650,48 +732,9 @@ class WeinigHydromatManager:
             relief="sunken"
         )
         self.profile_image_label.pack(expand=True, fill=tk.BOTH)
+        
+        # Двойной клик открывает PDF или показывает увеличенное изображение
         self.profile_image_label.bind("<Double-Button-1>", self.show_profile_document)
-
-        # Твои оригинальные поля Name, Description и т.д.
-        # Название
-        ttk.Label(text_frame, text="Name:", font=("Arial", 12, "bold")).grid(
-            row=0, column=0, sticky=tk.W, pady=4
-        )
-        self.profile_name_var = tk.StringVar(value="")
-        ttk.Label(text_frame, textvariable=self.profile_name_var, 
-                 font=self.small_font).grid(row=0, column=1, sticky=tk.W, pady=4, padx=(8, 0))
-        
-        # Описание
-        ttk.Label(text_frame, text="Description:", font=("Arial", 12, "bold")).grid(
-            row=1, column=0, sticky=tk.W, pady=4
-        )
-        self.profile_desc_var = tk.StringVar(value="")
-        ttk.Label(text_frame, textvariable=self.profile_desc_var, 
-                 wraplength=400, font=self.small_font).grid(row=1, column=1, sticky=tk.W, pady=4, padx=(8, 0))
-        
-        # Скорость подачи
-        ttk.Label(text_frame, text="Feed Rate:", font=("Arial", 12, "bold")).grid(
-            row=2, column=0, sticky=tk.W, pady=4
-        )
-        self.feed_rate_var = tk.StringVar(value="")
-        ttk.Label(text_frame, textvariable=self.feed_rate_var, 
-                 font=self.small_font).grid(row=2, column=1, sticky=tk.W, pady=4, padx=(8, 0))
-        
-        # Размер материала
-        ttk.Label(text_frame, text="Material Size:", font=("Arial", 12, "bold")).grid(
-            row=3, column=0, sticky=tk.W, pady=4
-        )
-        self.material_size_var = tk.StringVar(value="")
-        ttk.Label(text_frame, textvariable=self.material_size_var, 
-                 font=self.small_font).grid(row=3, column=1, sticky=tk.W, pady=4, padx=(8, 0))
-        
-        # Размер изделия
-        ttk.Label(text_frame, text="Product Size:", font=("Arial", 12, "bold")).grid(
-            row=4, column=0, sticky=tk.W, pady=4
-        )
-        self.product_size_var = tk.StringVar(value="")
-        ttk.Label(text_frame, textvariable=self.product_size_var, 
-                 font=self.small_font).grid(row=4, column=1, sticky=tk.W, pady=4, padx=(8, 0))
     
     def show_profile_document(self, event):
         """Показывает PDF документ профиля или увеличенное изображение"""

@@ -872,9 +872,6 @@ class ProfileEditor:
 
             if self.is_editing and self.profile:
                 profile_id = self.profile.id
-                print(f"DEBUG: is_editing = {self.is_editing}")
-                print(f"DEBUG: pdf_was_uploaded = {self.pdf_was_uploaded}")
-                print(f"DEBUG: pdf_data length = {len(pdf_data_to_save) if pdf_data_to_save else 'NONE'}")
                 success = self.profile_service.update_profile(
                     self.profile.id,
                     name=name,
@@ -918,21 +915,30 @@ class ProfileEditor:
                 # Дополнительно обновляем material_size в БД на случай, если он изменился в процессе сохранения вариантов
                 self.profile_service.update_profile(profile_id, material_size=material_size_str)
 
-                if success:
-                    # 1. Уведомляем систему о выборе текущего профиля
-                    self.profile_service.set_current_profile(profile_id)
-                    
-                    # 2. Показываем сообщение
-                    messagebox.showinfo("Success", f"Profile {action} successfully")
-                    
-                    # 3. Принудительно вызываем обновление главного окна
-                    # Мы используем notify_observers, чтобы не зависеть от иерархии self.parent
-                    self.profile_service.notify_observers('profile_updated', profile_id)
+            if success:
+                messagebox.showinfo("Success", f"Profile {action} successfully")
+                
+                if hasattr(self.parent, "profile_service"):
+                    try:
+                        self.parent.profile_service.set_current_profile(profile_id)
+                    except Exception as e:
+                        print(f"DEBUG: Error setting current profile: {e}")
 
-                    self.pdf_was_uploaded = False
-                    self.pdf_was_removed = False
-                    self.window.destroy() # Закрываем редактор
+                try:
+                    if hasattr(self.parent, 'show_profile_details'):
+                        self.parent.show_profile_details()
+                    if hasattr(self.parent, 'load_profiles'):
+                        self.parent.load_profiles()
+                except Exception as e:
+                    print(f"DEBUG: Error updating parent UI: {e}")
 
+                if hasattr(self, 'callback') and self.callback:
+                    try: self.callback()
+                    except: pass
+
+                self.pdf_was_uploaded = False
+                self.pdf_was_removed = False
+                self.window.destroy()
             else:
                 messagebox.showerror("Error", f"Failed to {action} profile")
                 self._saving = False

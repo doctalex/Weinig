@@ -227,8 +227,8 @@ class WeinigHydromatManager:
 
         if not product_size:
             try:
-                size_service = self.parent.size_service  # корректный источник
-                variants = size_service.get_product_variants_for_profile(profile.id)
+                # ИСПРАВЛЕНО: используем self.size_service вместо self.parent.size_service
+                variants = self.size_service.get_product_variants_for_profile(profile.id)
 
                 if variants:
                     default_variant = next((v for v in variants if v.get('is_default')), variants[0])

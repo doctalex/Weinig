@@ -60,8 +60,30 @@ class DatabaseManager:
                         Material_size TEXT DEFAULT '100x100',
                         Product_size TEXT DEFAULT '90x90',
                         Image BLOB,
+                        pdf_path TEXT,
                         Created_Date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
+                ''')
+                
+                # Таблица размеров продуктов
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS product_size_variants (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        profile_id INTEGER NOT NULL,
+                        width REAL NOT NULL,
+                        thickness REAL NOT NULL,
+                        material_id INTEGER,
+                        is_default BOOLEAN DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (profile_id) REFERENCES Profiles (ID) ON DELETE CASCADE,
+                        FOREIGN KEY (material_id) REFERENCES material_sizes (id) ON DELETE SET NULL
+                    )
+                ''')
+                
+                # Индекс для быстрого поиска
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_product_variants_profile 
+                    ON product_size_variants(profile_id)
                 ''')
                 
                 # Таблица инструментов

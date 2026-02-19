@@ -913,7 +913,11 @@ class ProfileEditor:
                 )
                 
                 # Дополнительно обновляем material_size в БД на случай, если он изменился в процессе сохранения вариантов
-                self.profile_service.update_profile(profile_id, material_size=material_size_str)
+                self.profile_service.update_profile(
+                    profile_id, 
+                    material_size=material_size_str,
+                    keep_existing_pdf=True  # Сохраняем PDF!
+                )
 
             if success:
                 messagebox.showinfo("Success", f"Profile {action} successfully")

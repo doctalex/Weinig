@@ -221,7 +221,7 @@ class PDFManager:
         
         Args:
             profile_id: ID профиля
-            pdf_path: Конкретный путь к файлу
+            pdf_path: Конкретный путь к файлу (если None, удаляет все PDF профиля)
             
         Returns:
             bool: True если успешно удалено
@@ -229,18 +229,26 @@ class PDFManager:
         try:
             deleted = False
             
-            # Удаляем по конкретному пути
+            # Если указан конкретный путь, удаляем только его
             if pdf_path and os.path.exists(pdf_path):
-                os.remove(pdf_path)
-                logger.info(f"PDF удален: {pdf_path}")
-                deleted = True
-            
-            # Удаляем все PDF для этого профиля (на всякий случай)
-            for pdf_file in self.pdf_folder.glob(f"profile_{profile_id:04d}*"):
-                if pdf_file.suffix.lower() == '.pdf':
-                    os.remove(pdf_file)
-                    logger.info(f"PDF удален: {pdf_file.name}")
+                filename = os.path.basename(pdf_path)
+                # Проверяем, что файл действительно принадлежит этому профилю
+                if filename.startswith(f"profile_{profile_id:04d}"):
+                    os.remove(pdf_path)
+                    logger.info(f"PDF удален: {pdf_path}")
                     deleted = True
+                else:
+                    logger.warning(f"Файл {filename} не принадлежит профилю {profile_id}")
+            
+            # Если путь не указан, удаляем все PDF для этого профиля
+            elif pdf_path is None:
+                for pdf_file in self.pdf_folder.glob(f"profile_{profile_id:04d}*.pdf"):
+                    try:
+                        os.remove(pdf_file)
+                        logger.info(f"PDF удален: {pdf_file.name}")
+                        deleted = True
+                    except Exception as e:
+                        logger.error(f"Ошибка удаления {pdf_file}: {e}")
             
             return deleted
             

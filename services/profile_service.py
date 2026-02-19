@@ -257,23 +257,21 @@ class ProfileService(Observable):
                        feed_rate: float = None, material_size: str = None,
                        product_size: str = None, pdf_data: bytes = None,
                        pdf_filename: str = None, keep_existing_pdf: bool = False) -> bool:
-        """Updates a profile with PDF support
+        """
+        Updates a profile with PDF support
         
         Args:
             keep_existing_pdf: Если True, сохраняет существующий PDF без изменений
-                               (игнорирует pdf_data и pdf_filename)
+                              (игнорирует pdf_data и pdf_filename)
         """
-        # ПРОВЕРКА ДОСТУПА
         self._raise_if_read_only()
         
         try:
-            # Получаем текущий профиль
             current_profile = self.get_profile(profile_id)
             if not current_profile:
                 logger.error(f"Profile not found: {profile_id}")
                 return False
             
-            # Подготавливаем данные для обновления
             update_data = {}
             if name is not None:
                 update_data['name'] = name
@@ -286,17 +284,14 @@ class ProfileService(Observable):
             if product_size is not None:
                 update_data['product_size'] = product_size
             
-            # Обработка PDF
-            new_preview = current_profile.image_data
-            new_pdf_path = current_profile.pdf_path
-            
+            # Обработка PDF только если не нужно сохранять существующий
             if not keep_existing_pdf:
+                # Замена/добавление PDF
                 if pdf_data is not None:
-                    # Удаляем старый PDF если он был
+                    # Удаляем старый PDF (конкретный файл)
                     if current_profile.pdf_path:
                         self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
                     
-                    # Сохраняем новый PDF
                     success, pdf_path = self.pdf_manager.save_profile_pdf(
                         profile_id, pdf_data, pdf_filename, overwrite_existing=True
                     )
@@ -305,28 +300,20 @@ class ProfileService(Observable):
                         logger.error(f"Failed to save new PDF for profile {profile_id}")
                         return False
                     
-                    new_pdf_path = pdf_path
-                    
-                    # Извлекаем превью из нового PDF
                     new_preview = self.pdf_manager.extract_pdf_preview(pdf_data)
+                    update_data['image_data'] = new_preview
+                    update_data['pdf_path'] = pdf_path
                 
-                # Если передали None для pdf_data, значит удаляем PDF
+                # Удаление PDF
                 elif pdf_data is None and pdf_filename is None:
                     if current_profile.pdf_path:
                         self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
                         update_data['image_data'] = None
                         update_data['pdf_path'] = None
-                
-                # Добавляем данные изображения и PDF в обновление
-                if pdf_data is not None:
-                    update_data['image_data'] = new_preview
-                    update_data['pdf_path'] = new_pdf_path
             
-            # Выполняем обновление в базе данных
             success = self.db.update_profile(profile_id, **update_data)
             
             if success:
-                # ВАЖНО: уведомляем наблюдателей
                 self.notify_observers('profile_updated', profile_id)
                 logger.info(f"Profile updated successfully: {profile_id}")
             
@@ -335,7 +322,7 @@ class ProfileService(Observable):
         except Exception as e:
             logger.error(f"Error updating profile {profile_id}: {e}")
             return False
-    
+            
     def delete_profile(self, profile_id: int) -> bool:
         """Deletes a profile and its associated PDF file"""
         # ПРОВЕРКА ДОСТУПА

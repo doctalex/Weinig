@@ -1,0 +1,57 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# PyInstaller
+output/
+*.exe
+
+# Database
+*.db
+*.sqlite3
+*.sqlite
+tools_database.db
+
+# Logs
+*.log
+logs/
+
+# Backups
+backups/*.zip
+*.zip
+
+# Generated PDFs
+img/profile_pdfs/*.pdf
+
+# Generated images
+img/tool_*.png
+img/thumbs/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temp
+*.tmp
+*.temp

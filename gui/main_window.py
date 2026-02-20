@@ -286,36 +286,103 @@ class WeinigHydromatManager:
             self.load_profile_tools()
     
     def setup_ui(self):
-        """Настройка интерфейса"""
+        """Настройка интерфейса с поддержкой прокрутки"""
         # Стили
         style = ttk.Style()
         style.theme_use('clam')
-        
+
         # Шрифты
         self.large_font = ("Arial", 14)
         self.medium_font = ("Arial", 13)
         self.small_font = ("Arial", 12)
         self.title_font = ("Arial", 16, "bold")
         self.header_font = ("Arial", 14, "bold")
-        
-        # Главный фрейм
-        main_frame = ttk.Frame(self.root, padding="15")
+
+        # === СОЗДАЕМ ПРОКРУЧИВАЕМУЮ ОБЛАСТЬ ===
+        # Создаем Canvas
+        self.canvas = tk.Canvas(self.root, borderwidth=0, highlightthickness=0)
+
+        # Создаем вертикальный и горизонтальный скроллбары
+        self.v_scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.canvas.yview)
+        self.h_scrollbar = ttk.Scrollbar(self.root, orient="horizontal", command=self.canvas.xview)
+
+        # Настраиваем canvas
+        self.canvas.configure(yscrollcommand=self.v_scrollbar.set, xscrollcommand=self.h_scrollbar.set)
+
+        # Создаем фрейм внутри canvas для всего содержимого
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        # Добавляем фрейм в canvas (без указания ширины)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        # Размещаем canvas и скроллбары с использованием grid
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.v_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.h_scrollbar.grid(row=1, column=0, sticky="ew")
+
+        # Привязываем события для прокрутки колесиком мыши
+        self._bind_mouse_wheel()
+
+        # === ВАЖНО: принудительно обновляем геометрию ===
+        self.root.update_idletasks()
+
+        # Теперь устанавливаем ширину фрейма равной ширине canvas
+        canvas_width = self.canvas.winfo_width()
+        if canvas_width > 1:
+            self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+
+        # Привязываем событие изменения размера окна
+        self.root.bind("<Configure>", self._on_window_configure)
+
+        # === ВЕСЬ ОСТАЛЬНОЙ ИНТЕРФЕЙС СОЗДАЕМ ВНУТРИ self.scrollable_frame ===
+        # Главный фрейм (теперь внутри scrollable_frame)
+        main_frame = ttk.Frame(self.scrollable_frame, padding="15")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Настройка растягивания
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        
+
+        # Настройка растягивания внутри scrollable_frame
+        self.scrollable_frame.columnconfigure(0, weight=1)
+        self.scrollable_frame.rowconfigure(0, weight=1)
+
         # Левая панель - профили
         self._setup_left_panel(main_frame)
-        
+
         # Правая панель - детали
         self._setup_right_panel(main_frame)
-        
-        # Настройка весов колонок
+
+        # Настройка весов колонок внутри main_frame
         main_frame.columnconfigure(0, weight=0)
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(0, weight=1)
+    
+    def _bind_mouse_wheel(self):
+        """Привязывает прокрутку колесиком мыши"""
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        def _on_shift_mousewheel(event):
+            self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+        
+        # Для Windows
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.canvas.bind_all("<Shift-MouseWheel>", _on_shift_mousewheel)
+
+    def _on_window_configure(self, event):
+        """Обновляет размеры при изменении окна"""
+        if hasattr(self, 'canvas') and hasattr(self, 'canvas_window'):
+            # Обновляем scrollregion
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            
+            # Обновляем ширину внутреннего фрейма
+            canvas_width = self.canvas.winfo_width()
+            if canvas_width > 50:  # избегаем слишком маленьких значений
+                self.canvas.itemconfig(self.canvas_window, width=canvas_width)
     
     def _sort_profiles(self, col, reverse):
         """Сортировка профилей по выбранной колонке"""

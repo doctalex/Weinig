@@ -90,6 +90,8 @@ class WeinigHydromatManager:
         
         # Автоматический бэкап при запуске (1 раз в день)
         self._auto_backup_on_startup()
+        
+        self.root.after(100, self._fix_canvas_size)  # вызов через 100ms после загрузки
 
     def _auto_backup_on_startup(self):
         """Автоматическое создание бэкапа при запуске (1 раз в день)"""
@@ -381,8 +383,20 @@ class WeinigHydromatManager:
             
             # Обновляем ширину внутреннего фрейма
             canvas_width = self.canvas.winfo_width()
-            if canvas_width > 50:  # избегаем слишком маленьких значений
+            if canvas_width > 50:
                 self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+            
+            # Убеждаемся, что фрейм прижат к верху
+            self.canvas.coords(self.canvas_window, 0, 0)
+    
+    def _fix_canvas_size(self):
+        """Корректирует размер canvas после загрузки"""
+        self.root.update_idletasks()
+        if hasattr(self, 'canvas') and hasattr(self, 'canvas_window'):
+            canvas_width = self.canvas.winfo_width()
+            if canvas_width > 50:
+                self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
     
     def _sort_profiles(self, col, reverse):
         """Сортировка профилей по выбранной колонке"""

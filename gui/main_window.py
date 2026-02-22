@@ -205,36 +205,33 @@ class WeinigHydromatManager:
         self.show_profile_details()
     
     def show_profile_details(self):
-        print("DEBUG: show_profile_details CALLED, current_profile_id =", self.current_profile_id)
+            print("DEBUG: show_profile_details CALLED, current_profile_id =", self.current_profile_id)
 
-        if not self.current_profile_id:
-            self.clear_display()
-            return
+            if not self.current_profile_id:
+                self.clear_display()
+                return
 
-        # Загружаем профиль напрямую из БД
-        profile = self.profile_service.get_profile_by_id(self.current_profile_id)
-        if not profile:
-            self.clear_display()
-            return
+            # Загружаем профиль напрямую из БД
+            profile = self.profile_service.get_profile_by_id(self.current_profile_id)
+            if not profile:
+                self.clear_display()
+                return
 
-        # Обновляем UI
-        self.current_profile_var.set(f"Current: {profile.name}")
-        self.profile_name_var.set(profile.name)
-        self.profile_desc_var.set(profile.description or "No description")
-        self.feed_rate_var.set(f"{profile.feed_rate} m/min" if profile.feed_rate else "")
-        self.material_size_var.set(profile.material_size or "Not specified")
+            # Обновляем UI
+            self.current_profile_var.set(f"Current: {profile.name}")
+            self.profile_name_var.set(profile.name)
+            self.profile_desc_var.set(profile.description or "No description")
+            self.feed_rate_var.set(f"{profile.feed_rate} m/min" if profile.feed_rate else "")
+            self.material_size_var.set(profile.material_size or "Not specified")
 
-        # Получаем product_size
-        product_size = getattr(profile, 'product_size', '')
-
-        if not product_size:
+            # --- ОБНОВЛЕННАЯ ЛОГИКА РАЗМЕРОВ ---
+            product_size = "Not specified"
             try:
-                # ИСПРАВЛЕНО: используем self.size_service вместо self.parent.size_service
+                # Всегда пытаемся взять свежие данные из вариантов (SizeService)
                 variants = self.size_service.get_product_variants_for_profile(profile.id)
 
                 if variants:
                     default_variant = next((v for v in variants if v.get('is_default')), variants[0])
-
                     width = default_variant.get('width')
                     thickness = default_variant.get('thickness')
 
@@ -242,24 +239,24 @@ class WeinigHydromatManager:
                         product_size = f"{width} x {thickness}"
                     else:
                         product_size = f"{width}"
-
-                    # Сохраняем в БД
-                    self.profile_service.update_profile_product_size(profile.id, product_size)
                 else:
-                    product_size = "Not specified"
+                    # Если вариантов нет, используем то, что записано в объекте профиля
+                    product_size = getattr(profile, 'product_size', "Not specified") or "Not specified"
 
             except Exception as e:
-                print(f"DEBUG: Error loading product size: {e}")
-                product_size = "Not specified"
+                print(f"DEBUG: Error loading product size from variants: {e}")
+                product_size = getattr(profile, 'product_size', "Not specified")
 
-        print("DEBUG: final product_size to display:", product_size)
-        self.product_size_var.set(product_size)
+            print("DEBUG: final product_size to display:", product_size)
+            self.product_size_var.set(product_size)
 
-        # Загружаем превью PDF
-        self._load_profile_preview(profile.get_preview())
+            # --- ОБНОВЛЕННАЯ ЗАГРУЗКА ПРЕВЬЮ PDF ---
+            # Запрашиваем превью динамически, так как в БД его больше нет
+            preview_data = self.profile_service.get_profile_preview(profile.id)
+            self._load_profile_preview(preview_data)
 
-        # Загружаем инструменты
-        self.load_profile_tools()
+            # Загружаем инструменты
+            self.load_profile_tools()
     
     def _on_tool_created(self, tool_id: int, tool_code: str):
         """Обработка создания инструмента"""

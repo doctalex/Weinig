@@ -205,8 +205,8 @@ class ToolEditor:
                     break
         
         # Кнопка создания профиля
-        ttk.Button(profile_frame, text="New Profile", 
-                command=self._create_new_profile).pack(anchor=tk.W)
+        #ttk.Button(profile_frame, text="New Profile", 
+        #        command=self._create_new_profile).pack(anchor=tk.W)
         
         # Секция: Позиционирование и тип
         pos_frame = ttk.LabelFrame(parent, text="Positioning & Type", padding="10")

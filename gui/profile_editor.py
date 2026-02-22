@@ -17,6 +17,7 @@ from gui.base.dialogs import show_error, show_info, ask_yesno
 from gui.base.widgets import ImagePreview
 from utils.logger import log_profile_change
 from services.size_service import SizeService
+from gui.material_dialog import MaterialAddDialog
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,8 @@ class ProfileEditor:
         size_names.insert(0, "")
 
         self.material_size_var = tk.StringVar()
+        
+        # --- НОВЫЙ КОНТЕЙНЕР ДЛЯ КНОПКИ + ---
         material_input_frame = ttk.Frame(material_group)
         material_input_frame.pack(fill=tk.X, pady=(2, 0))
 
@@ -170,11 +173,20 @@ class ProfileEditor:
             material_input_frame,
             textvariable=self.material_size_var,
             values=size_names,
-            state="normal",
+            state="readonly", # Установил readonly для порядка
             width=25
         )
         self.material_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.material_combo.bind("<<ComboboxSelected>>", self._on_material_changed)
+
+        # Кнопка "+"
+        self.add_mat_btn = ttk.Button(
+            material_input_frame, 
+            text="+", 
+            width=3, 
+            command=self._on_add_material_click
+        )
+        self.add_mat_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         # --- Product Sizes ---
         product_frame = ttk.LabelFrame(main_container, text="Product Sizes", padding="8")
@@ -632,6 +644,7 @@ class ProfileEditor:
                 break
 
         self._update_product_variants_table()
+    
     def _get_selected_material_size(self):
         """Получить выбранный объект MaterialSize"""
         selected_name = self.material_size_var.get()
@@ -644,6 +657,31 @@ class ProfileEditor:
                 return size
         return None
 
+    def _on_add_material_click(self):
+        """Открывает диалог создания нового материала"""
+        # Передаем self.window (Toplevel), self.db (DatabaseManager) и callback
+        # Предполагается, что DatabaseManager доступен через self.db или self.profile_service.db
+        db_manager = self.profile_service.db 
+        MaterialAddDialog(self.window, db_manager, callback=self._on_material_added)
+
+    def _on_material_added(self, new_id):
+        """Срабатывает после сохранения в диалоговом окне"""
+        # 1. Запрашиваем обновленный список через SizeService
+        all_sizes = self.size_service.get_all_material_sizes()
+        
+        # 2. Обновляем список строк в комбобоксе
+        display_names = [s.display_name() for s in all_sizes]
+        display_names.insert(0, "")
+        self.material_combo.config(values=display_names)
+        
+        # 3. Находим наш новый материал и автоматически выбираем его
+        for size in all_sizes:
+            if size.id == new_id:
+                self.material_size_var.set(size.display_name())
+                # Генерируем событие изменения, если нужно обновить другие поля
+                self._on_material_changed(None)
+                break
+    
     def _load_profile_data(self):
         """Загружает данные профиля в форму"""
         if not self.profile:
@@ -692,8 +730,13 @@ class ProfileEditor:
             self.original_pdf_data = None
             self.original_pdf_filename = None
 
-        if self.profile.image_data:
-            self.pdf_preview.set_image(self.profile.image_data)
+        # Динамическая загрузка превью из PDF файла
+        if hasattr(self.profile, 'id') and self.profile.id:
+            preview_data = self.profile_service.get_profile_preview(self.profile.id)
+            if preview_data:
+                self.pdf_preview.set_image(preview_data)
+            else:
+                self.pdf_preview.clear() # Или метод для отображения "No Image"
 
     def upload_pdf(self):
         """Выбирает PDF файл профиля"""
@@ -856,7 +899,9 @@ class ProfileEditor:
                     pdf_data_to_save = None
                     pdf_filename_to_save = None
                 else:
-                    pdf_data_to_save = self.original_pdf_data if self.original_pdf_data else None
+                    # Если ничего не меняли, шлем None, чтобы сервис не перезаписывал файл
+                    pdf_data_to_save = None 
+                    pdf_filename_to_save = None
 
             log_profile_change({
                 'name': name,
@@ -879,8 +924,8 @@ class ProfileEditor:
                     feed_rate=feed_rate,
                     material_size=material_size_str,
                     product_size="",
-                    pdf_data=pdf_data_to_save,
-                    pdf_filename=pdf_filename_to_save
+                    pdf_data=pdf_data_to_save if (self.pdf_was_uploaded or self.pdf_was_removed) else None,
+                    pdf_filename=pdf_filename_to_save if self.pdf_was_uploaded else None
                 )
                 action = "updated"
             else:
@@ -912,13 +957,6 @@ class ProfileEditor:
                     profile_id, product_size_str
                 )
                 
-                # Дополнительно обновляем material_size в БД на случай, если он изменился в процессе сохранения вариантов
-                self.profile_service.update_profile(
-                    profile_id, 
-                    material_size=material_size_str,
-                    keep_existing_pdf=True  # Сохраняем PDF!
-                )
-
             if success:
                 messagebox.showinfo("Success", f"Profile {action} successfully")
                 

@@ -115,13 +115,11 @@ class ProfileService(Observable):
         self.current_profile_id = profile_id
         self.notify_observers('current_profile_changed', profile_id)
     
-    # === МЕТОДЫ РЕДАКТИРОВАНИЯ С ПОДДЕРЖКОЙ PDF ===
-    
     def create_profile(self, name: str, description: str = '', 
-                      feed_rate: float = 2.5, material_size: str = '100x100',
-                      product_size: str = '90x90', pdf_data: bytes = None, 
+                      feed_rate: float = 30.0, material_size: str = '',
+                      product_size: str = '', pdf_data: bytes = None, 
                       pdf_filename: str = None) -> Optional[int]:
-        """Creates a new profile with PDF support"""
+        """Creates a new profile with PDF support (Clean version)"""
         self._raise_if_read_only()
         
         try:
@@ -129,12 +127,11 @@ class ProfileService(Observable):
             
             # Шаг 1: Подготовка данных PDF
             pdf_path = None
-            preview_image = None
             
             if pdf_data:
                 logger.info(f"PDF provided: {len(pdf_data)} bytes, filename: {pdf_filename}")
                 
-                # Временное сохранение PDF (потом переименуем)
+                # Временное сохранение PDF
                 success, temp_pdf_path = self.pdf_manager.save_profile_pdf(
                     0,  # Временный ID
                     pdf_data, 
@@ -148,11 +145,10 @@ class ProfileService(Observable):
                 pdf_path = temp_pdf_path
                 logger.info(f"PDF temporarily saved: {pdf_path}")
                 
-                # Извлекаем превью
-                preview_image = self.pdf_manager.extract_pdf_preview(pdf_data)
-                logger.info(f"Preview extracted: {len(preview_image) if preview_image else 0} bytes")
+                # ПРИМЕЧАНИЕ: Мы больше не извлекаем превью здесь, 
+                # так как не сохраняем его в базу данных Profiles.
             
-            # Шаг 2: Создаем профиль В БАЗЕ С PDF ПУТЕМ
+            # Шаг 2: Создаем профиль В БАЗЕ (Без image_data)
             logger.info("Creating profile in database...")
             profile_id = self.db.add_profile(
                 name=name,
@@ -160,73 +156,64 @@ class ProfileService(Observable):
                 feed_rate=feed_rate,
                 material_size=material_size,
                 product_size=product_size,
-                image_data=preview_image,
                 pdf_path=pdf_path
             )
-            
-            logger.info(f"Profile created with ID: {profile_id}")
             
             if not profile_id:
                 logger.error("Database returned no profile ID")
                 if pdf_path:
-                    # Удаляем временный PDF
                     import os
                     os.remove(pdf_path)
                 return None
+
+            logger.info(f"Profile created with ID: {profile_id}")
             
-            # Шаг 3: Если PDF был сохранен с временным ID, переименовываем
-            if pdf_path and "profile_0000_" in pdf_path:
+            # Шаг 3: Переименование PDF файла (строго ID.pdf)
+            if pdf_path:
                 import os
                 from pathlib import Path
                 
                 old_path = Path(pdf_path)
-                
-                # Генерируем новое имя
-                if pdf_filename:
-                    safe_name = self._make_filename_safe(pdf_filename)
-                    new_filename = f"profile_{profile_id:04d}_{safe_name}"
-                else:
-                    new_filename = f"profile_{profile_id:04d}.pdf"
-                
-                # Добавляем .pdf если нет
-                if not new_filename.lower().endswith('.pdf'):
-                    new_filename += '.pdf'
-                
+                # Генерируем простое имя: 001.pdf
+                new_filename = f"{profile_id:03d}.pdf"
                 new_path = old_path.parent / new_filename
                 
                 try:
-                    old_path.rename(new_path)
-                    logger.info(f"PDF renamed: {old_path.name} -> {new_path.name}")
+                    # Удаляем старый файл, если он есть (Windows fix)
+                    if new_path.exists():
+                        os.remove(new_path)
                     
-                    # Обновляем путь в базе данных
-                    success = self.db.update_profile(
+                    old_path.rename(new_path)
+                    logger.info(f"PDF finalized as: {new_filename}")
+                    
+                    self.db.update_profile(
                         profile_id=profile_id,
                         pdf_path=str(new_path)
                     )
-                    
-                    if success:
-                        logger.info(f"Database updated with new PDF path: {new_path}")
-                    else:
-                        logger.error("Failed to update PDF path in database")
-                        
                 except Exception as rename_error:
-                    logger.error(f"Error renaming PDF file: {rename_error}")
-            
-            # Шаг 4: Логируем результат
+                    logger.error(f"Error finalizing PDF name: {rename_error}")
+
             logger.info(f"=== CREATE PROFILE SUCCESS ===")
-            logger.info(f"Profile ID: {profile_id}")
-            logger.info(f"Name: {name}")
-            logger.info(f"PDF path in DB: {pdf_path}")
-            
-            # Уведомляем наблюдателей
             self.notify_observers('profile_created', profile_id)
-            
             return profile_id
             
         except Exception as e:
             logger.error(f"Error creating profile: {e}", exc_info=True)
-            logger.info(f"=== CREATE PROFILE FAILED ===")
             return None
+
+    def get_profile_preview(self, profile_id: int) -> Optional[bytes]:
+        """Получает превью из PDF файла профиля для отображения в GUI"""
+        profile = self.get_profile(profile_id)
+        if profile and profile.pdf_path:
+            import os
+            if os.path.exists(profile.pdf_path):
+                try:
+                    with open(profile.pdf_path, 'rb') as f:
+                        pdf_data = f.read()
+                    return self.pdf_manager.extract_pdf_preview(pdf_data)
+                except Exception as e:
+                    logger.error(f"Error reading PDF for preview: {e}")
+        return None
     
     def _make_filename_safe(self, filename: str) -> str:
         """
@@ -257,66 +244,44 @@ class ProfileService(Observable):
                        feed_rate: float = None, material_size: str = None,
                        product_size: str = None, pdf_data: bytes = None,
                        pdf_filename: str = None, keep_existing_pdf: bool = False) -> bool:
-        """
-        Updates a profile with PDF support
         
-        Args:
-            keep_existing_pdf: Если True, сохраняет существующий PDF без изменений
-                              (игнорирует pdf_data и pdf_filename)
-        """
         self._raise_if_read_only()
         
         try:
             current_profile = self.get_profile(profile_id)
             if not current_profile:
-                logger.error(f"Profile not found: {profile_id}")
                 return False
             
             update_data = {}
-            if name is not None:
-                update_data['name'] = name
-            if description is not None:
-                update_data['description'] = description
-            if feed_rate is not None:
-                update_data['feed_rate'] = feed_rate
-            if material_size is not None:
-                update_data['material_size'] = material_size
-            if product_size is not None:
-                update_data['product_size'] = product_size
+            if name is not None: update_data['name'] = name
+            if description is not None: update_data['description'] = description
+            if feed_rate is not None: update_data['feed_rate'] = feed_rate
+            if material_size is not None: update_data['material_size'] = material_size
+            if product_size is not None: update_data['product_size'] = product_size
             
-            # Обработка PDF только если не нужно сохранять существующий
             if not keep_existing_pdf:
-                # Замена/добавление PDF
+                # Если пришли НОВЫЕ данные PDF
                 if pdf_data is not None:
-                    # Удаляем старый PDF (конкретный файл)
                     if current_profile.pdf_path:
                         self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
                     
                     success, pdf_path = self.pdf_manager.save_profile_pdf(
                         profile_id, pdf_data, pdf_filename, overwrite_existing=True
                     )
-                    
-                    if not success:
-                        logger.error(f"Failed to save new PDF for profile {profile_id}")
-                        return False
-                    
-                    new_preview = self.pdf_manager.extract_pdf_preview(pdf_data)
-                    update_data['image_data'] = new_preview
-                    update_data['pdf_path'] = pdf_path
+                    if success:
+                        update_data['pdf_path'] = pdf_path
                 
-                # Удаление PDF
                 elif pdf_data is None and pdf_filename is None:
                     if current_profile.pdf_path:
                         self.pdf_manager.delete_profile_pdf(profile_id, current_profile.pdf_path)
-                        update_data['image_data'] = None
                         update_data['pdf_path'] = None
+                        # !!! И ЗДЕСЬ ТОЖЕ УДАЛИЛИ 'image_data' !!!
             
+            # Отправляем в базу только те поля, которые в ней есть
             success = self.db.update_profile(profile_id, **update_data)
             
             if success:
                 self.notify_observers('profile_updated', profile_id)
-                logger.info(f"Profile updated successfully: {profile_id}")
-            
             return success
             
         except Exception as e:
